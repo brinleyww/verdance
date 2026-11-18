@@ -19,11 +19,16 @@ There is no timer, no enemies and almost no HUD. Wander as long as you like.
 | Space | jump |
 | E (hold) | restore a relay |
 | R (hold) | radio |
+| F | launch / recall the drone |
 | M | field map |
 | H | hide the HUD |
 | Esc | menu and settings |
 
 Touch devices get an on-screen stick, look-drag and buttons.
+
+### The drone
+
+Press **F** to crouch, set a folding quadcopter on the ground, unfold its arms and send it up; the view switches to its camera feed. Fly with **W A S D**, **Space** / **C** for up and down, **Shift** for sport mode and the mouse wheel for speed; the gimbal keeps the picture level while the airframe leans. Press **F** again (or let the battery run low) and it flies itself home: the view cuts back to your eyes while it comes in, lands, spins down, folds and is picked up. The video link fades beyond about 900 m and deep in the chasm.
 
 ## Running smoothly on modest hardware
 
