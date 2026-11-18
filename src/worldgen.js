@@ -49,6 +49,12 @@ const TRAILS = [
 export function chasmCentre(x) { return -650 + 36 * Math.sin(x / 290) + 18 * Math.sin(x / 113 + 1.3); }
 export function chasmHalfWidth(x) { return 118 + 16 * Math.sin(x / 210 + 0.7); }
 
+// Cliff edge table: per metre of x and per wall, the rim edge z, rim heights and floor (see cliffs.js).
+// The terrain wall behind the cliff mesh is a straight batter of CLIFF.slope metres down per metre in.
+export const CLIFF = { x0: -2048, n: 4096, slope: 14.3 };
+// Decorative springs that pour over the north wall: [x, width]
+export const NORTH_FALLS = [[-430, 9], [-120, 5], [330, 12], [610, 7]];
+
 export const SPHERE = { x: 0, z: chasmCentre(0), radius: 26 };
 export const PYLONS = [
   { x: -6, z: chasmCentre(0) + chasmHalfWidth(0) + 26 },
@@ -116,18 +122,38 @@ export function generateWorld(seed = 1337, progress = () => {}) {
     return h;
   }
 
+  // rim edge distance from the centre line; side +1 = south wall, -1 = north wall
+  function edgeW(x, side) {
+    let w = chasmHalfWidth(x) + 5.5 * S2.fbm(x / 38, side * 3.7 + 50, 3) + 1.5 * S.noise2(x / 11, side * 9.1 + 2.0);
+    if (side > 0) w -= 9 * Math.exp(-(((x + 10) / 24) ** 2)); // rocky promontory at the end of the rim trail
+    return w;
+  }
+  const edgeTab = new Float32Array(CLIFF.n * 2);
+  for (let i = 0; i < CLIFF.n; i++) {
+    edgeTab[i] = edgeW(CLIFF.x0 + i, 1);
+    edgeTab[CLIFF.n + i] = edgeW(CLIFF.x0 + i, -1);
+  }
+  function edgeAt(x, side) {
+    const f = x - CLIFF.x0;
+    if (f < 0 || f >= CLIFF.n - 1) return edgeW(x, side);
+    const i = Math.floor(f), t = f - i, o = side > 0 ? 0 : CLIFF.n;
+    return edgeTab[o + i] * (1 - t) + edgeTab[o + i + 1] * t;
+  }
+  // signed distance from the rim edge (negative = over the chasm)
+  function edgeDist(x, z) {
+    const zc = chasmCentre(x);
+    return Math.abs(z - zc) - edgeAt(x, z >= zc ? 1 : -1);
+  }
+  // plateau, then a straight steep batter down to the floor: a convex profile, so coarser terrain rings
+  // (chords between vertices) always stay inside the rock, behind the cliff mesh
   function chasmCarve(x, z, h) {
-    const zc = chasmCentre(x), w = chasmHalfWidth(x);
-    const d = Math.abs(z - zc);
-    if (d > w + 4) return h;
-    const t = d / w;
-    // jagged wall profile with ledges
-    const jag = 0.06 * S2.fbm(x / 35, z / 35 + 50, 3);
-    const wall = smoothstep(1.0 + jag, 0.80 + jag, t);
-    const ledge = Math.floor(wall * 5.0 + 0.5 * S.noise2(x / 60, z / 60)) / 5.0;
-    const carve = lerp(wall, ledge, 0.35);
-    const floor = -340 + 30 * S.fbm(x / 120, z / 120, 3);
-    return lerp(h, floor, clamp(carve, 0, 1));
+    const zc = chasmCentre(x);
+    const side = z >= zc ? 1 : -1;
+    const d = Math.abs(z - zc), we = edgeAt(x, side);
+    if (d >= we) return h;
+    const drop = h - (we - d) * CLIFF.slope;
+    if (drop > -310) return drop;
+    return Math.max(drop, -340 + 30 * S.fbm(x / 120, z / 120, 3));
   }
 
   // ---------- creek ----------
@@ -140,7 +166,7 @@ export function generateWorld(seed = 1337, progress = () => {}) {
       const ground = chasmCarve(x, z, baseHeight(x, z));
       const width = 1.7 + 1.1 * (0.5 + 0.5 * S3.noise2(i * 0.021, 3.3)) + Math.min(1.2, i * 0.0016);
       let bed = Math.min(prev - 0.012, ground - 0.9);
-      if (z < chasmCentre(x) + chasmHalfWidth(x) - 2) bed = Math.min(prev - 0.6, ground - 0.4); // falls
+      if (z < chasmCentre(x) + edgeAt(x, 1) - 0.5) bed = Math.min(prev - 0.6, ground - 0.4); // falls
       prev = bed;
       creek.push({ x, z, bed, width, water: bed + 0.32 });
     }
@@ -148,7 +174,7 @@ export function generateWorld(seed = 1337, progress = () => {}) {
     for (let pass = 0; pass < 3; pass++) {
       for (let i = 1; i < creek.length - 1; i++) {
         const c = creek[i];
-        if (c.z < chasmCentre(c.x) + chasmHalfWidth(c.x)) continue;
+        if (c.z < chasmCentre(c.x) + edgeAt(c.x, 1) + 1) continue;
         const s = (creek[i - 1].bed + c.bed + creek[i + 1].bed) / 3;
         c.bed = Math.min(c.bed, Math.max(s, creek[i + 1].bed + 0.012));
         c.water = c.bed + 0.32;
@@ -166,12 +192,17 @@ export function generateWorld(seed = 1337, progress = () => {}) {
     const z = -size / 2 + (j - 1 + 0.5) * ccell;
     for (let i = 0; i < CW; i++) {
       const x = -size / 2 + (i - 1 + 0.5) * ccell;
-      coarse[j * CW + i] = chasmCarve(x, z, baseHeight(x, z, false));
+      coarse[j * CW + i] = baseHeight(x, z, false); // chasm carved later at full resolution
     }
     if ((j & 63) === 0) progress(0.08 + 0.3 * j / CW);
   }
 
   const heights = new Float32Array(N * N);
+  const zcCol = new Float32Array(N), weS = new Float32Array(N), weN = new Float32Array(N);
+  for (let i = 0; i < N; i++) {
+    const x = -size / 2 + (i + 0.5) * cell;
+    zcCol[i] = chasmCentre(x); weS[i] = edgeAt(x, 1); weN[i] = edgeAt(x, -1);
+  }
   const cub = (p0, p1, p2, p3, t) => p1 + 0.5 * t * (p2 - p0 + t * (2 * p0 - 5 * p1 + 4 * p2 - p3 + t * (3 * (p1 - p2) + p3 - p0)));
   for (let j = 0; j < N; j++) {
     const z = -size / 2 + (j + 0.5) * cell;
@@ -188,10 +219,13 @@ export function generateWorld(seed = 1337, progress = () => {}) {
         cub(coarse[r1 + x0], coarse[r1 + x1], coarse[r1 + x2], coarse[r1 + x3], tx),
         cub(coarse[r2 + x0], coarse[r2 + x1], coarse[r2 + x2], coarse[r2 + x3], tx),
         cub(coarse[r3 + x0], coarse[r3 + x1], coarse[r3 + x2], coarse[r3 + x3], tx), tz);
-      // detail octaves only outside the chasm walls
-      const zc = chasmCentre(x), w = chasmHalfWidth(x);
-      const inChasm = Math.abs(z - zc) < w;
-      if (!inChasm) h += 1.1 * S.fbm(x / 42, z / 42, 3) + 0.22 * S2.noise2(x / 9, z / 9);
+      // detail octaves on the land, then the chasm carve at full resolution
+      const dz = z - zcCol[i], we = dz >= 0 ? weS[i] : weN[i], d = Math.abs(dz);
+      if (d > we - 2) h += 1.1 * S.fbm(x / 42, z / 42, 3) + 0.22 * S2.noise2(x / 9, z / 9);
+      if (d < we) {
+        h -= (we - d) * CLIFF.slope;
+        if (h < -310) h = Math.max(h, -340 + 30 * S.fbm(x / 120, z / 120, 3));
+      }
       heights[j * N + i] = h;
     }
     if ((j & 63) === 0) progress(0.38 + 0.25 * j / N);
@@ -385,7 +419,7 @@ export function generateWorld(seed = 1337, progress = () => {}) {
       const cw = creekW[hk] || 2;
       grass *= smoothstep(cw * 0.9, cw + 1.6, cd);
       grass *= 1 - smoothstep(380, 520, h); // above tree line: short alpine grass handled by terrain
-      if (Math.abs(z - chasmCentre(x)) < chasmHalfWidth(x) - 4) grass = 0;
+      grass *= smoothstep(3.0, 7.0, edgeDist(x, z)); // bare rock lip along the cliff edge (the lip rides over the turf to ~3 m)
       let pad = 0;
       for (const r of RELAYS) { const d = Math.hypot(x - r.x, z - r.z); grass *= smoothstep(8.5, 11.0, d); pad = Math.max(pad, 1 - smoothstep(8.0, 10.5, d)); }
       for (const p of PYLONS) { const d = Math.hypot(x - p.x, z - p.z); grass *= smoothstep(11, 16, d); }
@@ -422,7 +456,7 @@ export function generateWorld(seed = 1337, progress = () => {}) {
     for (const r of RELAYS) if (Math.hypot(x - r.x, z - r.z) < 13 + rad) return true;
     for (const p of PYLONS) if (Math.hypot(x - p.x, z - p.z) < 26 + rad) return true;
     for (const p of POWERLINE) if (Math.hypot(x - p[0], z - p[1]) < 9 + rad) return true;
-    if (Math.abs(z - chasmCentre(x)) < chasmHalfWidth(x) + 6) return true;
+    if (edgeDist(x, z) < 6) return true;
     if (Math.hypot(x - SPAWN.x, z - SPAWN.z) < 6) return true;
     return false;
   };
@@ -518,27 +552,47 @@ export function generateWorld(seed = 1337, progress = () => {}) {
     const y = H(x, z);
     rocks.push(x, y - s * sy * sink, z, rnd() * 6.28, s * (0.8 + rnd() * 0.5), s * sy, s * (0.8 + rnd() * 0.5), variant < 0 ? Math.floor(rnd() * 4) : variant);
   };
-  // outcrops on steep ground and the ridge
+  // variants 0-3 are water-worn and rounded, 4-7 are angular limestone blocks
+  const block = () => 4 + Math.floor(rnd() * 4);
+  // outcrops on steep ground and the ridge: mostly jointed limestone
   for (let gz = -half; gz < half; gz += 9) {
     for (let gx = -half; gx < half; gx += 9) {
       const x = gx + rnd() * 9, z = gz + rnd() * 9;
       const sl = slopeAt(x, z);
-      if (Math.abs(z - chasmCentre(x)) < chasmHalfWidth(x) + 2) continue;
+      if (edgeDist(x, z) < 10) continue;
       const ridge = Math.exp(-((x - 440) ** 2 + (z + 228) ** 2) / (2 * 90 * 90));
       const p = smoothstep(0.38, 0.9, sl) * 0.75 + ridge * 0.22 + 0.006;
       if (rnd() > p) continue;
       if (blocked(x, z, 1.2) && rnd() < 0.9) continue;
       const big = sl > 0.5 || ridge > 0.3;
-      addRock(x, z, big ? 2.2 + rnd() * 4.5 : 0.5 + rnd() * 1.2, 0.55 + rnd() * 0.4, big ? 0.45 : 0.4);
+      const ang = big || rnd() < 0.6;
+      addRock(x, z, big ? 2.2 + rnd() * 4.5 : 0.5 + rnd() * 1.2, ang ? 0.45 + rnd() * 0.3 : 0.55 + rnd() * 0.4, big ? 0.38 : 0.35, ang ? block() : -1);
     }
   }
-  // chasm rim and walls
-  for (let x = -1000; x < 1000; x += 9) {
+  // broken blocks along the cliff edge: clusters of strata-aligned slabs, half sunk into the rock lip
+  let creekLipX = 0;
+  for (let i = creek.length - 1; i >= 0; i--) {
+    if (creek[i].z > chasmCentre(creek[i].x) + edgeAt(creek[i].x, 1) + 1.5) { creekLipX = creek[i].x; break; }
+  }
+  const fallX = NORTH_FALLS.map(([x, w]) => ({ x, w, side: -1 })).concat([{ x: creekLipX, w: 6, side: 1 }]);
+  const nearPylon = (x, z) => PYLONS.some((p) => Math.hypot(x - p.x, z - p.z) < 30);
+  for (let cx = -1012; cx < 1012; cx += 11) {
     for (const side of [1, -1]) {
-      const zc = chasmCentre(x), w = chasmHalfWidth(x);
-      const z = zc + side * (w + 2 + rnd() * 10);
-      if (Math.abs(z) > half) continue;
-      if (rnd() < 0.55) addRock(x + rnd() * 6, z, 2 + rnd() * 5, 0.5 + rnd() * 0.5, 0.5);
+      if (rnd() > 0.55) continue;
+      const x0 = cx + rnd() * 11;
+      if (fallX.some((f) => f.side === side && Math.abs(f.x - x0) < f.w + 8)) continue;
+      const pieces = 1 + Math.floor(rnd() * 3.2);
+      const main = 1.3 + rnd() * 2.4;
+      for (let k = 0; k < pieces; k++) {
+        const x = x0 + (k ? (rnd() - 0.5) * main * 3 : 0);
+        const back = k ? 0.5 + rnd() * main * 1.6 : Math.pow(rnd(), 1.7) * 6;
+        const z = chasmCentre(x) + side * (edgeAt(x, side) + 0.4 + back);
+        if (Math.abs(z) > half || nearPylon(x, z)) continue;
+        const ci = clamp(Math.floor((x + size / 2) / cell), 0, N - 1), cj = clamp(Math.floor((z + size / 2) / cell), 0, N - 1);
+        if (creekDist[cj * N + ci] < (creekW[cj * N + ci] || 2) + 3 || trailDist[cj * N + ci] < 2.2) continue;
+        const s = k ? main * (0.3 + rnd() * 0.35) : main;
+        addRock(x, z, s, 0.45 + rnd() * 0.35, 0.3, block());
+      }
     }
   }
   // stones along the creek
@@ -561,6 +615,24 @@ export function generateWorld(seed = 1337, progress = () => {}) {
   }
   progress(0.98);
 
+  // cliff edge table, sampled from the final terrain so the rock lip follows the ground (and the creek channel)
+  const cliff = new Float32Array(CLIFF.n * 2 * 4);
+  for (let s2 = 0; s2 < 2; s2++) {
+    const side = s2 === 0 ? 1 : -1;
+    for (let i = 0; i < CLIFF.n; i++) {
+      const x = CLIFF.x0 + i;
+      const zc = chasmCentre(x), we = edgeAt(x, side), ze = zc + side * we;
+      const nearMap = Math.abs(x) < size / 2 - 45 && Math.abs(ze) < size / 2 - 45;
+      const Hh = (zz) => nearMap ? sampleArr(heights, N, size, x, zz) : baseHeight(x, zz, false);
+      const zf = zc + side * (we - 45);
+      const k = (s2 * CLIFF.n + i) * 4;
+      cliff[k] = ze;
+      cliff[k + 1] = Hh(ze + side * 0.6);
+      cliff[k + 2] = Hh(ze + side * 4.5);
+      cliff[k + 3] = -340 + 30 * S.fbm(x / 120, zf / 120, 3);
+    }
+  }
+
   // relays: final heights after pads
   for (const r of RELAYS) r.y = sampleArr(heights, N, size, r.x, r.z);
   for (const p of PYLONS) p.y = sampleArr(heights, N, size, p.x, p.z);
@@ -570,7 +642,7 @@ export function generateWorld(seed = 1337, progress = () => {}) {
     heights, far, normals, mask,
     trees: new Float32Array(trees), blobs: new Float32Array(blobs), shrubs: new Float32Array(shrubs),
     ferns: new Float32Array(ferns), rocks: new Float32Array(rocks), logs: new Float32Array(logs),
-    creek, trails: trailPts, relays: RELAYS, pylons: PYLONS, power,
+    creek, trails: trailPts, relays: RELAYS, pylons: PYLONS, power, cliff,
   };
 }
 

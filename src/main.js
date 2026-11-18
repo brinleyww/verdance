@@ -9,6 +9,7 @@ import { Terrain } from './terrain.js';
 import { Grass } from './grass.js';
 import { Trees } from './trees.js';
 import { Props } from './props.js';
+import { Cliffs } from './cliffs.js';
 import { Structures } from './structures.js';
 import { Water } from './water.js';
 import { Environment, Rain, WEATHERS, WEATHER_NEWS } from './weather.js';
@@ -105,6 +106,10 @@ async function boot() {
   setProgress(0.72, 'Planting trees'); await nextFrame();
   const trees = new Trees(renderer, world, q, tex);
   scene.add(trees.group);
+  setProgress(0.8, 'Cutting the chasm'); await nextFrame();
+  const cliffs = new Cliffs(world, q, tex);
+  scene.add(cliffs.group);
+  cliffs.addLedgeRocks();
   setProgress(0.82, 'Undergrowth'); await nextFrame();
   const props = new Props(world, q, tex);
   scene.add(props.group);
@@ -116,13 +121,13 @@ async function boot() {
   setProgress(0.86, 'Raising the towers'); await nextFrame();
   const structures = new Structures(world, q, tex, envTex);
   scene.add(structures.group);
-  const water = new Water(world, sky.uniforms);
+  const water = new Water(world, sky.uniforms, cliffs);
   scene.add(water.group);
   const rain = new Rain(q.rainCount);
   scene.add(rain.mesh);
 
   const game = new Game({ world, structures, player, audio, env, camera });
-  Object.assign(window.__verdance, { player, env, game, camera, renderer, world, trees, grass, sky, structures, terrain, props, scene, settings, audio });
+  Object.assign(window.__verdance, { player, env, game, camera, renderer, world, trees, grass, sky, structures, terrain, props, cliffs, scene, settings, audio });
   const post = new Post(renderer, scene, camera, q, shadows, G);
   window.__verdance.post = post;
 
@@ -308,6 +313,7 @@ async function boot() {
     grass.update(camera);
     trees.update(camera);
     props.update(camera);
+    cliffs.update(camera);
     shadows.update(camera, G.uSunDir.value);
     water.update(camera, time, env.s.rain);
     rain.update(env.s.rain, sky.uniforms.uSkyBright.value);

@@ -2,7 +2,8 @@
 import * as THREE from 'three';
 import { G, COMMON_GLSL } from './shaderlib.js';
 import { SKY_GLSL } from './sky.js';
-import { chasmCentre, chasmHalfWidth } from './worldgen.js';
+import { chasmCentre } from './worldgen.js';
+import { fallList } from './cliffs.js';
 
 const WATER_VS = /* glsl */`
 ${COMMON_GLSL}
@@ -117,7 +118,7 @@ void main() {
 `;
 
 export class Water {
-  constructor(world, skyUniforms) {
+  constructor(world, skyUniforms, cliffs) {
     this.group = new THREE.Group();
     const extra = { uRain: { value: 0 }, uTop: { value: 0 }, uMistAmount: { value: 1 } };
     this.extra = extra;
@@ -125,7 +126,7 @@ export class Water {
 
     // creek ribbon (above the rim only)
     const pos = [], uv = [], dist = [], speed = [], idx = [];
-    const pts = world.creek.filter((c) => c.z > chasmCentre(c.x) + chasmHalfWidth(c.x) + 1.5);
+    const pts = world.creek.filter((c) => world.chasmEdgeDist(c.x, c.z) > 1.5);
     let acc = 0;
     for (let i = 0; i < pts.length; i++) {
       const c = pts[i];
@@ -154,28 +155,31 @@ export class Water {
     creek.renderOrder = 10;
     this.group.add(creek);
 
-    // waterfalls: the creek's own fall plus a few on the far wall
-    const lip = pts[pts.length - 1];
-    const falls = [{ x: lip.x, z: lip.z, y: lip.water, w: lip.width * 1.6, dir: -1 }];
-    for (const [x, w] of [[-430, 9], [-120, 5], [330, 12], [610, 7]]) {
-      const z = chasmCentre(x) - chasmHalfWidth(x) - 1;
-      falls.push({ x, z, y: world.heightAt(x, z - 6) - 0.4, w, dir: 1 });
-    }
+    // waterfalls: the creek's own fall plus springs on the far wall; each pours over the rock lip and down
+    // the slot the cliff keeps clear for it, arcing out from the wall as it falls
+    const falls = cliffs ? cliffs.falls : fallList(world);
     this.fallTops = falls;
     const fm = new THREE.ShaderMaterial({ vertexShader: FALL_VS, fragmentShader: FALL_FS, uniforms: uni, transparent: true, depthWrite: false, side: THREE.DoubleSide });
     for (const f of falls) {
+      const side = f.wall === 0 ? 1 : -1;
+      const edgeZ = world.cliffRow(f.x, f.wall)[0];
+      const path = [[f.z, f.y, 0], [edgeZ - side * 0.7, f.y - 0.1, 0.1]];
       const segs = 24;
+      for (let s = 1; s <= segs; s++) {
+        const drop = Math.pow(s / segs, 1.35) * 180;
+        const y = f.y - 0.25 - drop;
+        const wallZ = cliffs ? cliffs.shape.faceZ(f.x, y, f.wall) : edgeZ - side * (1 + drop / 14.3);
+        path.push([wallZ - side * (0.9 + Math.sqrt(drop) * 1.3), y, drop]);
+      }
       const fp = [], fuv = [], fi = [];
-      for (let s = 0; s <= segs; s++) {
-        const t = s / segs;
-        const drop = t * 180;
-        const out = Math.sqrt(drop) * 1.6 * f.dir;
-        const spread = 1 + t * 1.8;
+      for (let s = 0; s < path.length; s++) {
+        const [z, y, drop] = path[s];
+        const spread = 1 + Math.min(1, drop / 180) * 1.8;
         for (const sx of [-1, 1]) {
-          fp.push(f.x + sx * f.w * 0.5 * spread, f.y - drop, f.z + out);
-          fuv.push(sx < 0 ? 0 : 1, drop);
+          fp.push(f.x + sx * f.w * 0.5 * spread, y, z);
+          fuv.push(sx < 0 ? 0 : 1, f.y - y);
         }
-        if (s < segs) { const k = s * 2; fi.push(k, k + 2, k + 1, k + 1, k + 2, k + 3); }
+        if (s < path.length - 1) { const k = s * 2; fi.push(k, k + 2, k + 1, k + 1, k + 2, k + 3); }
       }
       const fg = new THREE.BufferGeometry();
       fg.setAttribute('position', new THREE.Float32BufferAttribute(fp, 3));
