@@ -675,13 +675,13 @@ export class Drone {
     const eyeY = pl.pos.y + EYE - this.crouch;
     const hdL = Math.max(0.4, Math.hypot(D.L.x - pl.pos.x, D.L.z - pl.pos.z) - lean);
     // the pilot's head: down to the ground, then up after the drone
-    let pitch = lerp(D.p0, Math.atan2(D.L.y + 0.05 - eyeY, hdL), smoother(sat(t / 0.95)));
-    if (t > 4.2) {
+    if (t <= 4.2) pl.pitch = lerp(D.p0, Math.atan2(D.L.y + 0.05 - eyeY, hdL), smoother(sat(t / 1.2)));
+    else {
+      // the head follows the drone up with a little lag, as a person's does
       const hd = Math.hypot(this.pos.x - pl.pos.x, this.pos.z - pl.pos.z) - lean;
       const track = Math.atan2(this.pos.y - eyeY, Math.max(0.6, hd));
-      pitch = lerp(pitch, track, smooth(sat((t - 4.2) / 0.8)));
+      pl.pitch += (track - pl.pitch) * damp(3.8 * smooth(sat((t - 4.2) / 0.5)), dt);
     }
-    pl.pitch = pitch;
     // carried in from below the view and set down
     this.group.visible = t > 0.4;
     if (t < 1.55) {
@@ -796,7 +796,8 @@ export class Drone {
     // keep the camera on the way home
     const head = Math.atan2(-dx, -dz);
     if (this.view === 'feed') {
-      this.camYaw = this.camYaw + wrapA(head - this.camYaw) * damp(1.6, dt);
+      // turn toward home at an aircraft's pace, not a snap pan
+      this.camYaw += clamp(wrapA(head - this.camYaw) * damp(1.6, dt), -1.3 * dt, 1.3 * dt);
       this.camPitch += (-0.22 - this.camPitch) * damp(1.2, dt);
     }
     this.yaw += clamp(wrapA(head - this.yaw) * damp(3, dt), -2 * dt, 2 * dt);
