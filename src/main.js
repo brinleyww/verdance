@@ -68,7 +68,7 @@ async function boot() {
   // ---------- textures ----------
   setProgress(0.44, 'Growing leaves'); await nextFrame();
   const tex = { bark: {} };
-  tex.leaves = TX.makeLeafAtlas(q.name === 'low' ? 512 : 1024);
+  { const la = TX.makeLeafAtlas(q.name === 'low' ? 256 : 512); tex.leaves = la.map; tex.leafNormals = la.normal; }
   setProgress(0.5, 'Weathering bark'); await nextFrame();
   for (const k of ['oak', 'beech', 'birch', 'small']) tex.bark[k] = TX.makeBark(k, k.length * 7);
   setProgress(0.55, 'Scattering stones'); await nextFrame();

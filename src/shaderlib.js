@@ -152,6 +152,9 @@ const DIR_BLOCK = /* glsl */`
 	#ifdef VERD
 	sunShadow *= cloudShadowAt( vWPos );
 	#endif
+	#ifdef FOLIAGE_TRANS
+	gSunUnsh = directLight.color; gSunSh = sunShadow;
+	#endif
 	directLight.color *= sunShadow;
 	RE_Direct( directLight, geometryPosition, geometryNormal, geometryViewDir, geometryClearcoatNormal, material, reflectedLight );
 #endif
@@ -177,9 +180,11 @@ void RE_Direct_Foliage( const in IncidentLight directLight, const in vec3 geomet
 	float dotNL = dot( geometryNormal, directLight.direction );
 	float wrap = saturate( ( dotNL + uWrap ) / ( 1.0 + uWrap ) );
 	float VdL = saturate( dot( -geometryViewDir, directLight.direction ) );
-	float trans = pow( VdL, 4.0 ) * 0.8 + 0.2 * saturate( -dotNL );
-	vec3 transCol = material.diffuseColor * vec3( 1.25, 1.45, 0.55 );
-	reflectedLight.directDiffuse += directLight.color * ( wrap * BRDF_Lambert( material.diffuseColor ) + uTranslucency * trans * BRDF_Lambert( transCol ) );
+	float trans = pow( VdL, 3.0 ) * 0.75 + 0.25 * saturate( -dotNL );
+	vec3 transCol = material.diffuseColor * vec3( 1.3, 1.5, 0.5 );
+	// light scattered through stacked leaves still reaches leaves in shadow, so transmission sees a softened shadow
+	vec3 transLight = gSunUnsh * mix( gSunSh, cloudShadowAt( vWPos ), 0.35 );
+	reflectedLight.directDiffuse += directLight.color * wrap * BRDF_Lambert( material.diffuseColor ) + transLight * uTranslucency * trans * BRDF_Lambert( transCol );
 	#ifdef FOLIAGE_SPEC
 	vec3 H = normalize( directLight.direction + geometryViewDir );
 	float sp = pow( saturate( dot( geometryNormal, H ) ), 48.0 ) * saturate( dotNL ) * FOLIAGE_SPEC;
@@ -214,6 +219,7 @@ export function patch(material, o = {}) {
   material.defines = Object.assign(material.defines || {}, { VERD: '' }, o.defines || {});
   const uniforms = Object.assign({}, o.uniforms || {});
   if (o.foliage) {
+    material.defines.FOLIAGE_TRANS = '';
     uniforms.uTranslucency = { value: o.foliage.translucency ?? 0.6 };
     uniforms.uWrap = { value: o.foliage.wrap ?? 0.5 };
     material.userData.foliageUniforms = uniforms;
@@ -248,15 +254,24 @@ export function patch(material, o = {}) {
         fs = fs.replace('#include <normal_fragment_begin>', `float faceDirection = gl_FrontFacing ? 1.0 : - 1.0;\n${o.fragmentNormal}\nvec3 nonPerturbedNormal = normal;`);
         fs = fs.replace('#include <normal_fragment_maps>', '');
       }
-      if (o.foliage) fs = fs.replace('#include <lights_lambert_pars_fragment>', '#include <lights_lambert_pars_fragment>\n' + FOLIAGE_GLSL);
+      if (o.foliage) {
+        fs = fs.replace('#include <lights_lambert_pars_fragment>', '#include <lights_lambert_pars_fragment>\nvec3 gSunUnsh = vec3( 0.0 ); float gSunSh = 1.0;\n' + FOLIAGE_GLSL);
+        // skylight coming through the leaf from the far side
+        fs = fs.replace('#include <lights_fragment_maps>', `#include <lights_fragment_maps>
+          #if NUM_HEMI_LIGHTS > 0
+          irradiance += getHemisphereLightIrradiance( hemisphereLights[ 0 ], -geometryNormal ) * uTranslucency * 0.5 * vec3( 1.1, 1.3, 0.5 );
+          #endif`);
+      }
       else if (o.wet) fs = fs.replace('#include <lights_lambert_pars_fragment>', '#include <lights_lambert_pars_fragment>\n' + WET_GLSL);
       fs = fs.replace('#include <aomap_fragment>', `#include <aomap_fragment>
         {
-          float aoF = vAO * (${o.ao || '1.0'});
+          float aoF = clamp( vAO, 0.0, 1.0 ) * (${o.ao || '1.0'});
           reflectedLight.indirectDiffuse *= aoF;
           reflectedLight.indirectSpecular *= aoF;
         }`);
-      fs = fs.replace('#include <fog_fragment>', `${o.fragmentEnd || ''}\ngl_FragColor.rgb = applyFog( gl_FragColor.rgb, vWPos );`);
+      // MSAA can shade a sample whose centre lies outside a thin triangle; its extrapolated varyings can be huge,
+      // and bloom turns one such sample into a glowing square, so cap the output
+      fs = fs.replace('#include <fog_fragment>', `${o.fragmentEnd || ''}\ngl_FragColor.rgb = applyFog( min( gl_FragColor.rgb, vec3( 40.0 ) ), vWPos );`);
     }
     shader.vertexShader = vs;
     shader.fragmentShader = fs;
@@ -272,6 +287,12 @@ float sharpenAlpha(float a, vec2 uv, float texSize, float cutoff) {
   vec2 d = max(abs(dFdx(uv * texSize)), abs(dFdy(uv * texSize)));
   float lod = max(0.0, log2(max(d.x, d.y)));
   a *= 1.0 + lod * 0.28;
+  return clamp((a - cutoff) / max(fwidth(a), 1e-4) + 0.5, 0.0, 1.0);
+}
+float sharpenAlpha2(float a, vec2 uv, vec2 texSize, float cutoff) {
+  vec2 d = max(abs(dFdx(uv * texSize)), abs(dFdy(uv * texSize)));
+  float lod = max(0.0, log2(max(d.x, d.y)));
+  a *= 1.0 + lod * 0.3;
   return clamp((a - cutoff) / max(fwidth(a), 1e-4) + 0.5, 0.0, 1.0);
 }
 `;

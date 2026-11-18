@@ -106,6 +106,16 @@ function drawLeafShape(ctx, kind, len, wid, rnd) {
     ctx.moveTo(0, 0);
     for (const p of pts) ctx.lineTo(p[0], -p[1]);
     for (let i = pts.length - 1; i >= 0; i--) ctx.lineTo(pts[i][0], pts[i][1]);
+  } else if (kind === 'hazel') {
+    const pts = [];
+    for (let i = 0; i <= 30; i++) {
+      const t = i / 30;
+      const env = Math.pow(Math.sin(Math.PI * Math.pow(t, 0.72)), 0.75) * (1.1 - 0.4 * t);
+      pts.push([t * len, env * wid * (1 - 0.06 * (i % 2))]);
+    }
+    ctx.moveTo(0, 0);
+    for (const p of pts) ctx.lineTo(p[0], -p[1]);
+    for (let i = pts.length - 1; i >= 0; i--) ctx.lineTo(pts[i][0], pts[i][1]);
   } else {
     ctx.moveTo(0, 0);
     ctx.bezierCurveTo(len * 0.3, -wid, len * 0.8, -wid * 0.6, len, 0);
@@ -114,85 +124,126 @@ function drawLeafShape(ctx, kind, len, wid, rnd) {
   ctx.closePath();
 }
 
-function drawCluster(ctx, ox, oy, S, kind, seed) {
-  const rnd = mulberry32(seed);
-  ctx.save();
-  ctx.translate(ox, oy);
-  ctx.beginPath(); ctx.rect(0, 0, S, S); ctx.clip();
-  const conf = {
-    oak: { n: 44, len: [80, 132], wid: 0.36, hue: [88, 104], sat: [32, 48], lit: [20, 34] },
-    beech: { n: 50, len: [72, 112], wid: 0.33, hue: [86, 100], sat: [42, 60], lit: [22, 38] },
-    birch: { n: 72, len: [44, 70], wid: 0.42, hue: [78, 96], sat: [40, 58], lit: [26, 42] },
-  }[kind];
-  // twig skeleton
-  const tips = [];
-  ctx.strokeStyle = '#4a3a2c';
-  ctx.lineCap = 'round';
-  const twig = (x, y, ang, len, w, depth) => {
-    const x2 = x + Math.cos(ang) * len, y2 = y + Math.sin(ang) * len;
-    ctx.lineWidth = w;
-    ctx.beginPath(); ctx.moveTo(x, y);
-    ctx.quadraticCurveTo((x + x2) / 2 + (rnd() - 0.5) * 20, (y + y2) / 2 + (rnd() - 0.5) * 20, x2, y2);
-    ctx.stroke();
-    tips.push([x2, y2, ang]);
-    for (let k = 0; k < 3; k++) tips.push([x + (x2 - x) * (0.35 + k * 0.2), y + (y2 - y) * (0.35 + k * 0.2), ang + (rnd() - 0.5) * 2]);
-    if (depth > 0) {
-      const n = 2 + Math.floor(rnd() * 2);
-      for (let i = 0; i < n; i++) {
-        const t = 0.35 + rnd() * 0.6;
-        twig(x + (x2 - x) * t, y + (y2 - y) * t, ang + (rnd() < 0.5 ? -1 : 1) * (0.4 + rnd() * 0.6), len * (0.45 + rnd() * 0.25), w * 0.6, depth - 1);
-      }
-    }
-  };
-  twig(S * 0.5, S * 0.98, -Math.PI / 2 + (rnd() - 0.5) * 0.3, S * 0.62, 7, 2);
-  // leaves, back layer first (darker)
-  for (let layer = 0; layer < 2; layer++) {
-    const n = Math.round(conf.n * (layer ? 0.7 : 0.55));
-    for (let i = 0; i < n; i++) {
-      const tp = tips[Math.floor(rnd() * tips.length)];
-      const len = conf.len[0] + rnd() * (conf.len[1] - conf.len[0]);
-      const wid = len * conf.wid * (0.85 + rnd() * 0.3);
-      const ang = tp[2] + (rnd() - 0.5) * 2.4;
-      const h = conf.hue[0] + rnd() * (conf.hue[1] - conf.hue[0]);
-      const s = conf.sat[0] + rnd() * (conf.sat[1] - conf.sat[0]);
-      let l = conf.lit[0] + rnd() * (conf.lit[1] - conf.lit[0]);
-      if (!layer) l *= 0.72;
-      ctx.save();
-      ctx.translate(tp[0] + (rnd() - 0.5) * 14, tp[1] + (rnd() - 0.5) * 14);
-      ctx.rotate(ang);
-      const grad = ctx.createLinearGradient(0, 0, len, 0);
-      grad.addColorStop(0, hsl(h - 4, s * 0.9, l * 0.82));
-      grad.addColorStop(0.55, hsl(h, s, l));
-      grad.addColorStop(1, hsl(h + 6, s * 1.05, l * 1.12));
-      ctx.fillStyle = grad;
-      drawLeafShape(ctx, kind, len, wid, rnd);
-      ctx.fill();
-      // side shading for curvature
-      const g2 = ctx.createLinearGradient(0, -wid, 0, wid);
-      g2.addColorStop(0, 'rgba(255,255,230,0.10)');
-      g2.addColorStop(0.5, 'rgba(0,0,0,0)');
-      g2.addColorStop(1, 'rgba(0,0,0,0.16)');
-      ctx.fillStyle = g2;
-      ctx.fill();
-      // midrib + veins
-      ctx.strokeStyle = hsl(h + 8, s * 0.7, Math.min(70, l * 1.6), 0.55);
-      ctx.lineWidth = 1.4;
-      ctx.beginPath(); ctx.moveTo(2, 0); ctx.lineTo(len * 0.94, 0); ctx.stroke();
-      ctx.lineWidth = 0.7;
-      ctx.strokeStyle = hsl(h + 8, s * 0.7, Math.min(70, l * 1.45), 0.32);
-      for (let v = 1; v < 7; v++) {
-        const t = v / 7.5;
-        ctx.beginPath(); ctx.moveTo(len * t, 0); ctx.lineTo(len * (t + 0.12), -wid * 0.62 * Math.sin(Math.PI * t)); ctx.stroke();
-        ctx.beginPath(); ctx.moveTo(len * t, 0); ctx.lineTo(len * (t + 0.12), wid * 0.62 * Math.sin(Math.PI * t)); ctx.stroke();
-      }
-      ctx.restore();
-    }
-  }
-  ctx.restore();
+// A small leafy spray: one stem rising from the bottom centre of the cell (where it meets the branch),
+// a few side shoots, and alternate leaves with petioles. Drawn twice: colour, and a per-leaf normal map.
+const SPRAY = {
+  oak: { shoots: [2, 3], leaves: [6, 8], len: [0.17, 0.23], wid: 0.42, hue: [84, 100], sat: [30, 46], lit: [24, 36], stem: '#5b4a36' },
+  beech: { shoots: [2, 3], leaves: [7, 9], len: [0.14, 0.18], wid: 0.36, hue: [82, 96], sat: [42, 58], lit: [26, 39], stem: '#6a5040' },
+  birch: { shoots: [3, 4], leaves: [7, 9], len: [0.1, 0.13], wid: 0.5, hue: [76, 92], sat: [40, 56], lit: [30, 43], stem: '#4c3629' },
+  hazel: { shoots: [2, 3], leaves: [5, 7], len: [0.16, 0.21], wid: 0.56, hue: [80, 96], sat: [36, 50], lit: [26, 38], stem: '#6b5444' },
+};
+
+function encN(nx, ny) {
+  const l = Math.hypot(nx, ny, 1);
+  const x = nx / l, y = ny / l, z = 1 / l;
+  return `rgb(${Math.round((x * 0.5 + 0.5) * 255)},${Math.round((y * 0.5 + 0.5) * 255)},${Math.round((z * 0.5 + 0.5) * 255)})`;
 }
 
-function drawFern(ctx, ox, oy, S, seed) {
+function drawSpray(ctx, nctx, ox, oy, S, kind, seed) {
   const rnd = mulberry32(seed);
+  const conf = SPRAY[kind];
+  const shape = kind === 'hazel' ? 'hazel' : kind;
+  const m = S * 0.02;
+  for (const c of [ctx, nctx]) { c.save(); c.translate(ox, oy); c.beginPath(); c.rect(m, m, S - 2 * m, S - m); c.clip(); c.lineCap = 'round'; }
+  // shoots: [x0, y0, x1, y1, cx, cy, width]
+  const shoots = [];
+  const bx = S * 0.5, by = S * 0.995;
+  const tx = S * (0.5 + (rnd() - 0.5) * 0.1), ty = S * 0.17;
+  shoots.push([bx, by, tx, ty, S * (0.5 + (rnd() - 0.5) * 0.14), S * 0.5, S * 0.014]);
+  const nSide = conf.shoots[0] + Math.floor(rnd() * (conf.shoots[1] - conf.shoots[0] + 1));
+  for (let i = 0; i < nSide; i++) {
+    const t = 0.2 + 0.5 * (i + rnd() * 0.6) / nSide;
+    const sx = bx + (tx - bx) * t, sy = by + (ty - by) * t;
+    const side = i % 2 ? 1 : -1;
+    const ang = -Math.PI / 2 + side * (0.55 + rnd() * 0.35);
+    const len = S * (0.27 + rnd() * 0.1) * (1 - t * 0.3);
+    const ex = sx + Math.cos(ang) * len, ey = sy + Math.sin(ang) * len;
+    shoots.push([sx, sy, ex, ey, (sx + ex) / 2 + side * S * 0.03, (sy + ey) / 2 + S * 0.04 * rnd(), S * 0.008]);
+  }
+  const at = (s, t) => {
+    const [x0, y0, x1, y1, cx, cy] = s;
+    const a = (1 - t) * (1 - t), b = 2 * (1 - t) * t, c = t * t;
+    const x = a * x0 + b * cx + c * x1, y = a * y0 + b * cy + c * y1;
+    const dx = 2 * (1 - t) * (cx - x0) + 2 * t * (x1 - cx), dy = 2 * (1 - t) * (cy - y0) + 2 * t * (y1 - cy);
+    return [x, y, Math.atan2(dy, dx)];
+  };
+  // stems
+  for (const s of shoots) {
+    ctx.strokeStyle = conf.stem; nctx.strokeStyle = encN(0, 0);
+    for (const c of [ctx, nctx]) {
+      c.lineWidth = s[6];
+      c.beginPath(); c.moveTo(s[0], s[1]); c.quadraticCurveTo(s[4], s[5], s[2], s[3]); c.stroke();
+    }
+  }
+  // leaves: collect then draw in shuffled order so overlaps look natural
+  const leaves = [];
+  for (const s of shoots) {
+    const n = conf.leaves[0] + Math.floor(rnd() * (conf.leaves[1] - conf.leaves[0] + 1));
+    const main = s === shoots[0];
+    for (let k = 0; k < n; k++) {
+      const t = (main ? 0.32 : 0.18) + (k + 0.5 * rnd()) / n * (main ? 0.62 : 0.78);
+      const [x, y, a] = at(s, Math.min(1, t));
+      const side = k % 2 ? 1 : -1;
+      leaves.push({ x, y, ang: a + side * (0.65 + rnd() * 0.45), scale: 0.75 + 0.35 * t });
+    }
+    const [x, y, a] = at(s, 1);
+    leaves.push({ x, y, ang: a + (rnd() - 0.5) * 0.3, scale: 1.05 });
+  }
+  for (let i = leaves.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [leaves[i], leaves[j]] = [leaves[j], leaves[i]]; }
+  for (const L of leaves) {
+    const len = S * (conf.len[0] + rnd() * (conf.len[1] - conf.len[0])) * L.scale;
+    const wid = len * conf.wid * (0.85 + rnd() * 0.3);
+    const pet = len * 0.12;
+    const h = conf.hue[0] + rnd() * (conf.hue[1] - conf.hue[0]);
+    const s = conf.sat[0] + rnd() * (conf.sat[1] - conf.sat[0]);
+    const l = conf.lit[0] + rnd() * (conf.lit[1] - conf.lit[0]);
+    const ls = Math.floor(rnd() * 1e9);
+    // colour
+    ctx.save();
+    ctx.translate(L.x, L.y); ctx.rotate(L.ang);
+    ctx.strokeStyle = conf.stem; ctx.lineWidth = Math.max(1, S * 0.004);
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(pet, 0); ctx.stroke();
+    ctx.translate(pet, 0);
+    const grad = ctx.createLinearGradient(0, 0, len, 0);
+    grad.addColorStop(0, hsl(h - 3, s * 0.9, l * 0.8));
+    grad.addColorStop(0.5, hsl(h, s, l));
+    grad.addColorStop(1, hsl(h + 5, s * 1.04, l * 1.1));
+    ctx.fillStyle = grad;
+    drawLeafShape(ctx, shape, len, wid, mulberry32(ls));
+    ctx.fill();
+    ctx.clip();
+    ctx.strokeStyle = hsl(h + 10, s * 0.6, Math.min(72, l * 1.65), 0.5);
+    ctx.lineWidth = Math.max(0.8, S * 0.0024);
+    ctx.beginPath(); ctx.moveTo(1, 0); ctx.lineTo(len * 0.93, 0); ctx.stroke();
+    ctx.lineWidth = Math.max(0.5, S * 0.0012);
+    ctx.strokeStyle = hsl(h + 10, s * 0.6, Math.min(70, l * 1.45), 0.28);
+    for (let v = 1; v < 6; v++) {
+      const t = v / 6.5;
+      ctx.beginPath(); ctx.moveTo(len * t, 0); ctx.lineTo(len * (t + 0.12), -wid * 0.6 * Math.sin(Math.PI * t)); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(len * t, 0); ctx.lineTo(len * (t + 0.12), wid * 0.6 * Math.sin(Math.PI * t)); ctx.stroke();
+    }
+    ctx.restore();
+    // normal: each leaf gets its own tilt plus a crease along the midrib
+    const tlx = (rnd() - 0.5) * 0.9, tly = (rnd() - 0.5) * 0.9, cr = 0.35 + rnd() * 0.15;
+    // leaf-local +y in card space (u right, v up)
+    const px = -Math.sin(L.ang), py = -Math.cos(L.ang);
+    nctx.save();
+    nctx.translate(L.x, L.y); nctx.rotate(L.ang); nctx.translate(pet, 0);
+    const ng = nctx.createLinearGradient(0, -wid, 0, wid);
+    ng.addColorStop(0, encN(tlx + px * cr, tly + py * cr));
+    ng.addColorStop(0.5, encN(tlx, tly));
+    ng.addColorStop(1, encN(tlx - px * cr, tly - py * cr));
+    nctx.fillStyle = ng;
+    drawLeafShape(nctx, shape, len, wid, mulberry32(ls));
+    nctx.fill();
+    nctx.restore();
+  }
+  for (const c of [ctx, nctx]) c.restore();
+}
+
+function drawFern(ctx, ox, oy, S, seed, flat = false) {
+  const rnd = mulberry32(seed);
+  const F = flat ? encN(0, 0) : null;
   ctx.save();
   ctx.translate(ox, oy);
   ctx.beginPath(); ctx.rect(0, 0, S, S); ctx.clip();
@@ -203,8 +254,8 @@ function drawFern(ctx, ox, oy, S, seed) {
     const t = i / steps;
     pts.push([S * 0.5 + Math.sin(t * 2.2) * S * 0.02, S * (0.99 - t * 0.97)]);
   }
-  ctx.strokeStyle = '#5c6a2c';
-  ctx.lineWidth = 4;
+  ctx.strokeStyle = F || '#5c6a2c';
+  ctx.lineWidth = 4 * S / 512;
   ctx.beginPath(); pts.forEach((p, i) => (i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]))); ctx.stroke();
   for (let i = 2; i < steps; i++) {
     const t = i / steps;
@@ -219,13 +270,14 @@ function drawFern(ctx, ox, oy, S, seed) {
         const u = k / nseg;
         const sl = plen / nseg * 1.25;
         const l = 24 + rnd() * 10;
-        ctx.fillStyle = hsl(92 + rnd() * 10, 42 + rnd() * 12, l * (1 - u * 0.15));
+        const fc = hsl(92 + rnd() * 10, 42 + rnd() * 12, l * (1 - u * 0.15));
+        ctx.fillStyle = F || fc;
         ctx.beginPath();
         ctx.ellipse(u * plen + sl * 0.5, 0, sl * 0.62, sl * 0.38 * (1 - u * 0.4), side * 0.5, 0, Math.PI * 2);
         ctx.fill();
       }
-      ctx.strokeStyle = 'rgba(70,90,40,0.8)';
-      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = F || 'rgba(70,90,40,0.8)';
+      ctx.lineWidth = 1.5 * S / 512;
       ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(plen, 0); ctx.stroke();
       ctx.restore();
     }
@@ -233,16 +285,25 @@ function drawFern(ctx, ox, oy, S, seed) {
   ctx.restore();
 }
 
-export function makeLeafAtlas(size = 1024) {
-  const [c, ctx] = canvas(size, size);
-  const S = size / 2;
-  drawCluster(ctx, 0, 0, S, 'oak', 11);
-  drawCluster(ctx, S, 0, S, 'beech', 23);
-  drawCluster(ctx, 0, S, S, 'birch', 37);
-  drawFern(ctx, S, S, S, 41);
-  const img = ctx.getImageData(0, 0, size, size);
-  dilate(img, size, size, 5);
-  return dataTex(new Uint8Array(img.data.buffer), size, size, { clamp: true, srgb: true, aniso: 4 });
+// 4x2 atlas of leaf sprays (cells: 0-1 oak, 2-3 beech, 4-5 birch, 6 fern, 7 hazel) plus a matching per-leaf normal atlas.
+export function makeLeafAtlas(cell = 512) {
+  const W = cell * 4, H = cell * 2;
+  const [, ctx] = canvas(W, H);
+  const [, nctx] = canvas(W, H);
+  const kinds = ['oak', 'oak', 'beech', 'beech', 'birch', 'birch', 'fern', 'hazel'];
+  kinds.forEach((k, i) => {
+    const ox = (i % 4) * cell, oy = Math.floor(i / 4) * cell;
+    if (k === 'fern') { drawFern(ctx, ox, oy, cell, 41); drawFern(nctx, ox, oy, cell, 41, true); }
+    else drawSpray(ctx, nctx, ox, oy, cell, k, 11 + i * 17);
+  });
+  const img = ctx.getImageData(0, 0, W, H);
+  const nimg = nctx.getImageData(0, 0, W, H);
+  dilate(img, W, H, 6);
+  dilate(nimg, W, H, 6);
+  for (let i = 0; i < W * H; i++) nimg.data[i * 4 + 3] = 255;
+  const map = dataTex(new Uint8Array(img.data.buffer), W, H, { clamp: true, srgb: true, aniso: 4 });
+  const normal = dataTex(new Uint8Array(nimg.data.buffer), W, H, { clamp: true, aniso: 4 });
+  return { map, normal };
 }
 
 // ---------------- bark ----------------

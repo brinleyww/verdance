@@ -5,18 +5,19 @@ import { patch } from './shaderlib.js';
 import { genTree, buildLeafGeometry, makeLeafMaterial, makeBarkMaterial } from './trees.js';
 import { ChunkedInstances, composeMatrices, makeInstanced, cascadePrefix, FADE_GLSL_VS, FADE_GLSL_FS, FADE_VS, FADE_FS, fadeUniforms } from './instancing.js';
 
+// bushes: many stems from the ground, leafy almost all the way down so they read as dense masses
 const SHRUBS = [
-  { name: 'hazel', H: [1.4, 2.2], trunkFrac: 0.02, trunkR: 0.035, leader: 0.55, children: [7, 3], angle: [48, 40], lenRatio: [0.85, 0.6], radRatio: [0.7, 0.6],
-    wobble: [0.25, 0.25, 0.3], grav: [0.06, 0.02, -0.02], env: 'round', cell: 1, leafSize: 0.7, leafDensity: 15, bark: 'small', tint: [0.92, 1.05, 0.82] },
-  { name: 'bramble', H: [0.8, 1.3], trunkFrac: 0.02, trunkR: 0.025, leader: 0.4, children: [8, 3], angle: [70, 45], lenRatio: [1.1, 0.55], radRatio: [0.7, 0.6],
-    wobble: [0.3, 0.3, 0.3], grav: [-0.05, -0.05, -0.05], env: 'round', cell: 0, leafSize: 0.6, leafDensity: 17, bark: 'small', tint: [0.72, 0.85, 0.62] },
-  { name: 'sapling', H: [1.6, 2.6], trunkFrac: 0.3, trunkR: 0.03, leader: 1.0, children: [6, 3], angle: [40, 40], lenRatio: [0.45, 0.6], radRatio: [0.6, 0.6],
-    wobble: [0.1, 0.2, 0.25], grav: [0.0, -0.02, -0.06], env: 'cone', cell: 2, leafSize: 0.65, leafDensity: 16, bark: 'birch', tint: [1, 1, 1] },
+  { name: 'hazel', H: [1.5, 2.4], trunkFrac: 0.02, trunkR: 0.035, leader: 0.55, children: [10, 4], angle: [44, 42], lenRatio: [0.85, 0.55], radRatio: [0.7, 0.6],
+    wobble: [0.22, 0.25, 0.3], grav: [0.05, 0.0, -0.02], env: 'round', cells: [7, 7], spray: 0.46, sprayDensity: 9, t0: [0.12, 0.0], bark: 'small', tint: [0.92, 1.05, 0.82] },
+  { name: 'bramble', H: [0.9, 1.4], trunkFrac: 0.02, trunkR: 0.025, leader: 0.4, children: [11, 4], angle: [68, 46], lenRatio: [1.05, 0.55], radRatio: [0.7, 0.6],
+    wobble: [0.28, 0.3, 0.3], grav: [-0.05, -0.05, -0.05], env: 'round', cells: [7, 2], spray: 0.4, sprayDensity: 10, t0: [0.1, 0.0], bark: 'small', tint: [0.72, 0.86, 0.62] },
+  { name: 'sapling', H: [1.7, 2.7], trunkFrac: 0.25, trunkR: 0.03, leader: 1.0, children: [8, 4], angle: [40, 42], lenRatio: [0.45, 0.6], radRatio: [0.6, 0.6],
+    wobble: [0.1, 0.2, 0.25], grav: [0.0, -0.02, -0.06], env: 'cone', cells: [4, 5], spray: 0.42, sprayDensity: 9, t0: [0.15, 0.0], bark: 'birch', tint: [1, 1, 1] },
 ];
 
 function fernGeometry(seed) {
   const rnd = mulberry32(seed);
-  const pos = [], nor = [], uv = [], leaf = [], idx = [];
+  const pos = [], nor = [], uv = [], leaf = [], ctr = [], tan = [], idx = [];
   const fronds = 8 + Math.floor(rnd() * 3);
   let v = 0;
   const segs = 5;
@@ -38,8 +39,10 @@ function fernGeometry(seed) {
         const p = c.clone().addScaledVector(side, sx * wid * 0.5).add(new THREE.Vector3(0, sx * tw * t, 0));
         pos.push(p.x, p.y, p.z);
         nor.push(n.x, n.y, n.z);
-        uv.push(0.5 + (sx < 0 ? 0.02 : 0.98) * 0.5, 0.5 + (1 - (0.02 + t * 0.96)) * 0.5);
+        uv.push(0.5 + (sx < 0 ? 0.02 : 0.98) * 0.25, 0.5 + (1 - (0.02 + t * 0.96)) * 0.5);
         leaf.push(t, f * 1.7, 0.45 + t * 0.55, t);
+        ctr.push(0, 0, 0, 2);
+        tan.push(side.x, side.y, side.z);
       }
     }
     for (let s = 0; s < segs; s++) {
@@ -53,6 +56,8 @@ function fernGeometry(seed) {
   g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
   g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
   g.setAttribute('aLeaf', new THREE.Float32BufferAttribute(leaf, 4));
+  g.setAttribute('aCtr', new THREE.Float32BufferAttribute(ctr, 4));
+  g.setAttribute('aTan', new THREE.Float32BufferAttribute(tan, 3));
   g.setIndex(idx);
   return g;
 }
@@ -145,13 +150,15 @@ export class Props {
     // ----- shrubs -----
     {
       const S = world.shrubs, n = S.length / 6;
-      const fade = [[-2, -1], [q.shrubDist - band, q.shrubDist + band]];
+      const fade = [[-2, -1], [1e8, 1e8 + 1]];
+      const morph = [q.shrubDist - 3 * band, q.shrubDist - 0.6, 1, 0];
       const meshes = SHRUBS.map((sp, i) => {
         const t = genTree(sp, 300 + i * 11, { leafScale: q.leafScale });
-        const geo = buildLeafGeometry(t);
-        const m = makeLeafMaterial(tex, q, sp, fade), d = makeLeafMaterial(tex, q, sp, fade, true);
+        const geo = buildLeafGeometry(t, { subset: 0 });
+        const m = makeLeafMaterial(tex, q, sp, fade, false, { morph, fold: 0.35 }), d = makeLeafMaterial(tex, q, sp, fade, true, { morph, fold: 0.35 });
         m.userData.u.uTreeH.value = d.userData.u.uTreeH.value = t.H;
         m.userData.u.uSway.value = d.userData.u.uSway.value = 0.12;
+        for (const x of [m, d]) x.userData.u.uCrown.value.set(t.crownC.x, t.crownC.y, t.crownC.z, t.crownR);
         const mesh = makeInstanced(geo, m, q.shrubCap);
         mesh.customDepthMaterial = d;
         mesh.castShadow = q.shadows > 0 && q.shrubShadows;
@@ -163,7 +170,7 @@ export class Props {
       const pos = new Float32Array(n * 4), variant = new Uint16Array(n);
       const matrices = composeMatrices(n, (i) => ({ x: S[i * 6], y: S[i * 6 + 1], z: S[i * 6 + 2], ry: S[i * 6 + 3], sx: S[i * 6 + 4] }));
       for (let i = 0; i < n; i++) { pos.set([S[i * 6], S[i * 6 + 1], S[i * 6 + 2], 1e9], i * 4); variant[i] = S[i * 6 + 5]; }
-      const ci = new ChunkedInstances({ matrices, pos, variant }, [q.shrubDist], band, meshes);
+      const ci = new ChunkedInstances({ matrices, pos, variant }, [q.shrubDist], band, meshes, 2048, { exclusive: true, endBand: 0 });
       ci.sortRadii = [q.cascadeSplits[0] + 10, (q.cascadeSplits[1] || 60) + 15];
       this.updaters.push(ci);
     }
@@ -171,12 +178,14 @@ export class Props {
     // ----- ferns -----
     {
       const F = world.ferns, n = F.length / 5;
-      const fade = [[-2, -1], [q.fernDist - band, q.fernDist + band]];
-      const sp = { tint: [1, 1, 1], cell: 3 };
+      const fade = [[-2, -1], [1e8, 1e8 + 1]];
+      const morph = [q.fernDist - 3 * band, q.fernDist - 0.6, 1, 0];
+      const sp = { tint: [1, 1, 1] };
       const meshes = [0, 1].map((k) => {
         const geo = fernGeometry(500 + k);
-        const m = makeLeafMaterial(tex, q, sp, fade);
+        const m = makeLeafMaterial(tex, q, sp, fade, false, { morph, fold: 0 });
         m.userData.u.uTreeH.value = 1; m.userData.u.uSway.value = 0.06;
+        m.userData.u.uCrown.value.set(0, -1, 0, 1);
         const mesh = makeInstanced(geo, m, q.fernCap);
         mesh.receiveShadow = true;
         this.group.add(mesh);
@@ -185,7 +194,7 @@ export class Props {
       const pos = new Float32Array(n * 4), variant = new Uint16Array(n);
       const matrices = composeMatrices(n, (i) => ({ x: F[i * 5], y: F[i * 5 + 1], z: F[i * 5 + 2], ry: F[i * 5 + 3], sx: F[i * 5 + 4] }));
       for (let i = 0; i < n; i++) { pos.set([F[i * 5], F[i * 5 + 1], F[i * 5 + 2], 1e9], i * 4); variant[i] = i & 1; }
-      this.updaters.push(new ChunkedInstances({ matrices, pos, variant }, [q.fernDist], band, meshes));
+      this.updaters.push(new ChunkedInstances({ matrices, pos, variant }, [q.fernDist], band, meshes, 2048, { exclusive: true, endBand: 0 }));
     }
 
     // ----- rocks -----

@@ -205,7 +205,7 @@ function makeGrassMaterial(uniforms, q) {
     vertexPars: /* glsl */`
       attribute vec4 aBlade;
       attribute vec2 aTile;
-      varying vec3 vGrassCol;
+      centroid varying vec3 vGrassCol;
       ${DENSITY_GLSL}
     `,
     vertexMain: /* glsl */`
@@ -250,8 +250,8 @@ function makeGrassMaterial(uniforms, q) {
       vGrassCol = c * (1.0 - uWetness * 0.25);
       float ao = mix(0.32, 1.0, smoothstep(0.0, 0.85, t)) * (1.0 - gm.r * 0.4);
     `,
-    fragmentPars: 'varying vec3 vGrassCol;',
-    fragmentColor: 'diffuseColor.rgb = vGrassCol;',
+    fragmentPars: 'centroid varying vec3 vGrassCol;',
+    fragmentColor: 'diffuseColor.rgb = clamp(vGrassCol, 0.0, 1.0);',
     fragmentNormal: 'vec3 normal = normalize(vNormal);',
   });
   return mat;

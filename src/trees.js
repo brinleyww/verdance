@@ -1,19 +1,26 @@
-// Procedural broadleaf trees: recursive skeleton -> bark tubes + leaf-cluster cards, two mesh LODs and a baked impostor.
+// Procedural broadleaf trees: recursive skeleton down to twigs -> bark tubes + small leafy sprays attached to the twigs,
+// a full-detail LOD that morphs into a lighter LOD (no dithering), and a baked impostor for the far distance.
 import * as THREE from 'three';
 import { mulberry32 } from './noise.js';
-import { patch, ALPHA_SHARPEN, G } from './shaderlib.js';
+import { patch, ALPHA_SHARPEN } from './shaderlib.js';
 import { ChunkedInstances, composeMatrices, makeInstanced, cascadePrefix, FADE_GLSL_VS, FADE_GLSL_FS, FADE_VS, FADE_FS, fadeUniforms } from './instancing.js';
 
+// spray: card size in metres; sprayDensity: sprays per metre of leafy branch; t0: where sprays start on
+// [inner, terminal] branches (0 = the base of the branch)
 export const SPECIES = [
-  { name: 'oak', H: [13, 17], trunkFrac: 0.3, trunkR: 0.42, leader: 0.78, children: [7, 4, 3], angle: [64, 50, 44], lenRatio: [0.55, 0.62, 0.55],
-    radRatio: [0.52, 0.6, 0.62], wobble: [0.07, 0.2, 0.28], grav: [0.0, 0.05, -0.02], env: 'round', cell: 0, leafSize: 1.59, leafDensity: 8.8, bark: 'oak', tint: [1, 1, 1] },
-  { name: 'beech', H: [19, 24], trunkFrac: 0.42, trunkR: 0.36, leader: 1.0, children: [8, 4, 3], angle: [50, 44, 38], lenRatio: [0.42, 0.62, 0.55],
-    radRatio: [0.48, 0.6, 0.62], wobble: [0.03, 0.12, 0.22], grav: [0.03, 0.03, -0.04], env: 'ellipse', cell: 1, leafSize: 1.52, leafDensity: 9.3, bark: 'beech', tint: [1, 1, 1] },
-  { name: 'birch', H: [14, 18], trunkFrac: 0.28, trunkR: 0.19, leader: 1.0, children: [11, 3, 3], angle: [40, 36, 46], lenRatio: [0.36, 0.62, 0.62],
-    radRatio: [0.42, 0.55, 0.6], wobble: [0.05, 0.14, 0.22], grav: [0.0, -0.07, -0.16], env: 'cone', cell: 2, leafSize: 1.22, leafDensity: 11.5, bark: 'birch', tint: [1, 1, 1] },
-  { name: 'small', H: [6, 9], trunkFrac: 0.16, trunkR: 0.13, leader: 0.85, children: [6, 4, 3], angle: [52, 46, 40], lenRatio: [0.58, 0.62, 0.55],
-    radRatio: [0.55, 0.6, 0.62], wobble: [0.1, 0.22, 0.28], grav: [0.02, 0.02, -0.03], env: 'round', cell: 1, leafSize: 1.28, leafDensity: 10.2, bark: 'small', tint: [0.86, 1.06, 0.8] },
+  { name: 'oak', H: [13, 17], trunkFrac: 0.3, trunkR: 0.42, leader: 0.78, children: [8, 5, 5], angle: [64, 50, 46], lenRatio: [0.55, 0.6, 0.52],
+    radRatio: [0.52, 0.6, 0.62], wobble: [0.07, 0.2, 0.3], grav: [0.0, 0.05, -0.03], env: 'round', cells: [0, 1], spray: 0.95, sprayDensity: 8.5, t0: [0.45, 0.06], bark: 'oak', tint: [1, 1, 1] },
+  { name: 'beech', H: [19, 24], trunkFrac: 0.42, trunkR: 0.36, leader: 1.0, children: [8, 5, 5], angle: [50, 46, 42], lenRatio: [0.42, 0.6, 0.52],
+    radRatio: [0.48, 0.6, 0.62], wobble: [0.03, 0.12, 0.24], grav: [0.03, 0.02, -0.05], env: 'ellipse', cells: [2, 3], spray: 0.9, sprayDensity: 8.5, t0: [0.45, 0.06], bark: 'beech', tint: [1, 1, 1] },
+  { name: 'birch', H: [14, 18], trunkFrac: 0.28, trunkR: 0.19, leader: 1.0, children: [11, 4, 5], angle: [40, 38, 48], lenRatio: [0.36, 0.6, 0.6],
+    radRatio: [0.42, 0.55, 0.6], wobble: [0.05, 0.14, 0.24], grav: [0.0, -0.07, -0.18], env: 'cone', cells: [4, 5], spray: 0.74, sprayDensity: 10, t0: [0.4, 0.05], bark: 'birch', tint: [1, 1, 1] },
+  { name: 'small', H: [6, 9], trunkFrac: 0.16, trunkR: 0.13, leader: 0.85, children: [6, 5, 5], angle: [52, 48, 42], lenRatio: [0.58, 0.6, 0.55],
+    radRatio: [0.55, 0.6, 0.62], wobble: [0.1, 0.22, 0.3], grav: [0.02, 0.02, -0.04], env: 'round', cells: [7, 2], spray: 0.72, sprayDensity: 9, t0: [0.35, 0.05], bark: 'small', tint: [0.88, 1.04, 0.82] },
 ];
+
+// LOD1 keeps every LOD1_EVERY-th spray, grown by LOD1_SCALE so the crown keeps its coverage.
+export const LOD1_EVERY = 4, LOD1_SCALE = 1.85;
+const FOLD = 0.42;
 
 const UP = new THREE.Vector3(0, 1, 0);
 
@@ -55,7 +62,7 @@ export function genTree(sp, seed, opts = {}) {
     branches.push(b);
     if (level >= maxLevel) return;
     const n = sp.children[level] + Math.floor(rnd() * 2);
-    const tStart = level === 0 ? sp.trunkFrac : 0.25 + rnd() * 0.1;
+    const tStart = level === 0 ? sp.trunkFrac : 0.2 + rnd() * 0.1;
     for (let k = 0; k < n; k++) {
       const t = tStart + (0.97 - tStart) * ((k + 0.3 + rnd() * 0.4) / n);
       const fi = t * segs, i0 = Math.min(segs - 1, Math.floor(fi)), f = fi - i0;
@@ -87,60 +94,52 @@ export function genTree(sp, seed, opts = {}) {
   for (const b of branches) if (b.level >= maxLevel - 1) cr = Math.max(cr, b.pts[b.pts.length - 1].distanceTo(c));
   cr *= 0.92;
 
-  const leaves = [];
-  const dens = sp.leafDensity * (opts.leafScale || 1);
+  // leafy sprays: each one starts exactly on a twig or branch and points outwards and up, with its leaves facing the sky
+  const sprays = [];
+  const dens = sp.sprayDensity * (opts.leafScale || 1);
+  const t0s = sp.t0 || [0.45, 0.06];
   for (const b of branches) {
     if (b.level < maxLevel - 1) continue;
     const terminal = b.level === maxLevel;
-    const t0 = terminal ? 0.25 : 0.62;
-    const count = Math.round(b.length * (1 - t0) * dens * (terminal ? 1 : 0.5));
+    const t0 = terminal ? t0s[1] : t0s[0];
+    const count = Math.max(terminal ? 2 : 0, Math.round(b.length * (1 - t0) * dens * (terminal ? 1 : 0.55)));
     for (let k = 0; k < count; k++) {
-      const t = t0 + (1 - t0) * rnd();
+      const t = k === count - 1 && terminal ? 1 : t0 + (1 - t0) * ((k + rnd()) / count);
       const fi = t * (b.pts.length - 1), i0 = Math.min(b.pts.length - 2, Math.floor(fi)), f = fi - i0;
-      const anchor = b.pts[i0].clone().lerp(b.pts[i0 + 1], f).add(rv().multiplyScalar(0.18));
-      const out = anchor.clone().sub(new THREE.Vector3(c.x, Math.min(anchor.y, c.y), c.z)).normalize();
-      const bd = b.dirs[i0];
-      const up = bd.clone().multiplyScalar(0.5).add(out.clone().multiplyScalar(0.7)).add(rv().multiplyScalar(0.45)).normalize();
-      let nrm = rv().normalize();
-      nrm.addScaledVector(up, -nrm.dot(up)).normalize();
-      const size = sp.leafSize * (0.8 + rnd() * 0.4);
-      leaves.push({ anchor, up, nrm, size, phase: rnd() * 6.28 });
+      const anchor = b.pts[i0].clone().lerp(b.pts[i0 + 1], f);
+      const bd = b.dirs[i0].clone().lerp(b.dirs[i0 + 1], f).normalize();
+      const out = anchor.clone().sub(new THREE.Vector3(c.x, Math.min(anchor.y, c.y), c.z));
+      out.y *= 0.5;
+      if (out.lengthSq() < 1e-4) out.copy(bd); else out.normalize();
+      const axis = (t === 1 ? bd.clone() : rotateOff(bd, rnd() * Math.PI * 2, (28 + rnd() * 34) * Math.PI / 180))
+        .addScaledVector(out, 0.45).addScaledVector(UP, 0.3).normalize();
+      if (sp.grav[2] < -0.1) axis.y -= 0.35 * rnd(); // weeping birch sprays hang
+      axis.normalize();
+      const nrm = UP.clone().multiplyScalar(0.6).addScaledVector(out, 0.5).add(rv().multiplyScalar(0.75));
+      nrm.addScaledVector(axis, -nrm.dot(axis));
+      if (nrm.lengthSq() < 1e-3) nrm.crossVectors(axis, out).normalize(); else nrm.normalize();
+      const size = sp.spray * (0.8 + rnd() * 0.4) * (terminal ? 1 : 0.92);
+      sprays.push({ anchor, up: axis, nrm, size, phase: rnd() * 6.28, cell: sp.cells[rnd() < 0.5 ? 0 : 1], flip: rnd() < 0.5 });
     }
   }
-  // crown filler: cards on a shell around the crown so silhouettes read as dense masses
-  if (opts.fill !== 0) {
-    const box = new THREE.Box3();
-    for (const b of branches) if (b.level >= maxLevel - 1) box.expandByPoint(b.pts[b.pts.length - 1]);
-    const ctr = box.getCenter(new THREE.Vector3()), half = box.getSize(new THREE.Vector3()).multiplyScalar(0.5);
-    half.x = Math.max(half.x, 0.8); half.z = Math.max(half.z, 0.8); half.y = Math.max(half.y, 0.8);
-    const area = 4 * Math.PI * Math.pow((half.x * half.y + half.y * half.z + half.x * half.z) / 3, 1);
-    const nFill = Math.round(area / (sp.leafSize * sp.leafSize) * 1.5 * (opts.fill || 1) * (opts.leafScale || 1));
-    for (let k = 0; k < nFill; k++) {
-      const d = rv(); if (d.lengthSq() > 1 || d.lengthSq() < 1e-3) { k--; continue; }
-      d.normalize();
-      const r = 0.62 + 0.38 * Math.pow(rnd(), 0.6);
-      const anchor = new THREE.Vector3(ctr.x + d.x * half.x * r, ctr.y + d.y * half.y * r * 0.92, ctr.z + d.z * half.z * r);
-      if (anchor.y < sp.trunkFrac * H * 0.9) continue;
-      const out = d.clone();
-      const up = out.clone().multiplyScalar(0.6).add(new THREE.Vector3(0, 0.5, 0)).add(rv().multiplyScalar(0.5)).normalize();
-      let nrm = rv().normalize(); nrm.addScaledVector(up, -nrm.dot(up)).normalize();
-      leaves.push({ anchor, up, nrm, size: sp.leafSize * (0.85 + rnd() * 0.4), phase: rnd() * 6.28 });
-    }
-  }
-  return { branches, leaves, H, crownC: c, crownR: cr, maxLevel, sp };
+  return { branches, sprays, H, crownC: c, crownR: cr, maxLevel, sp };
 }
 
+// opt.maxLevel: deepest branch level drawn; opt.shrinkFrom: levels at or above this get an aShr radius so the
+// LOD0 material can thin them away while it morphs into LOD1
 export function buildTrunkGeometry(tree, opt = {}) {
   const maxLevel = opt.maxLevel ?? 99;
   const radial = opt.radial || [11, 6, 4, 3];
   const step = opt.step || 1;
-  const pos = [], nor = [], uv = [], wind = [], idx = [];
+  const shrinkFrom = opt.shrinkFrom ?? 99;
+  const pos = [], nor = [], uv = [], wind = [], shr = [], idx = [];
   let base = 0;
   for (const b of tree.branches) {
     if (b.level > maxLevel) continue;
     const R = radial[Math.min(b.level, radial.length - 1)];
-    const pts = b.pts.filter((_, i) => i % step === 0 || i === b.pts.length - 1);
-    const radii = b.radii.filter((_, i) => i % step === 0 || i === b.radii.length - 1);
+    const st = b.level >= 3 ? Math.max(step, 2) : step;
+    const pts = b.pts.filter((_, i) => i % st === 0 || i === b.pts.length - 1);
+    const radii = b.radii.filter((_, i) => i % st === 0 || i === b.radii.length - 1);
     const n = pts.length;
     const T = [], N = [], B = [];
     for (let i = 0; i < n; i++) {
@@ -166,12 +165,15 @@ export function buildTrunkGeometry(tree, opt = {}) {
           const y = pts[i].y + 0.4;
           r *= 1 + 0.6 * Math.exp(-y * 2.0) * (1 + 0.25 * Math.sin(th * 5 + b.phase));
         }
+        // twigs taper to a point so they meet the spray stems
+        if (b.level >= 3) r *= 1 - tAlong * 0.6;
         const dx = N[i].x * cs + B[i].x * sn, dy = N[i].y * cs + B[i].y * sn, dz = N[i].z * cs + B[i].z * sn;
         pos.push(pts[i].x + dx * r, pts[i].y + dy * r, pts[i].z + dz * r);
         nor.push(dx, dy, dz);
         uv.push(j / R * uRep, acc / 1.15);
         const sw = b.level === 0 ? 0 : Math.min(1, 0.25 * b.level + tAlong * 0.35 * b.level);
         wind.push(sw, b.phase);
+        shr.push(b.level >= shrinkFrom ? r : 0);
       }
     }
     for (let i = 0; i < n - 1; i++) {
@@ -187,51 +189,66 @@ export function buildTrunkGeometry(tree, opt = {}) {
   g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
   g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
   g.setAttribute('aWind', new THREE.Float32BufferAttribute(wind, 2));
+  g.setAttribute('aShr', new THREE.Float32BufferAttribute(shr, 1));
   g.setIndex(idx);
   g.computeBoundingSphere();
   return g;
 }
 
+// Spray cards. LOD0 (opt.every 1): 3x2 vertices so the shader can fold each card along its stem into a shallow V;
+// every LOD1_EVERY-th card is flagged as the one that survives into LOD1. LOD1 (opt.every > 1): flat quads of the
+// flagged cards at their grown size, identical to where the LOD0 morph ends.
 export function buildLeafGeometry(tree, opt = {}) {
   const every = opt.every || 1, scale = opt.scale || 1;
-  const cell = opt.cell ?? tree.sp.cell;
-  const u0 = (cell % 2) * 0.5, v0 = Math.floor(cell / 2) * 0.5;
-  const pos = [], nor = [], uv = [], leaf = [], idx = [];
+  const subset = opt.subset ?? LOD1_EVERY; // 0: no card survives (shrubs, ferns shrink away completely)
+  const lod1 = every > 1;
+  const pos = [], nor = [], uv = [], leaf = [], ctr = [], tan = [], idx = [];
   const c = tree.crownC, cr = Math.max(tree.crownR, 0.5);
   let v = 0;
-  const right = new THREE.Vector3(), cn = new THREE.Vector3(), p = new THREE.Vector3();
-  tree.leaves.forEach((L, i) => {
+  const right = new THREE.Vector3(), p = new THREE.Vector3();
+  tree.sprays.forEach((L, i) => {
     if (i % every) return;
     const s = L.size * scale;
     right.crossVectors(L.up, L.nrm).normalize();
     const d = L.anchor.distanceTo(c) / cr;
-    cn.copy(L.anchor).sub(c).normalize();
-    const n = cn.clone().multiplyScalar(0.78).addScaledVector(L.nrm, 0.22 * Math.sign(L.nrm.dot(cn) || 1)).normalize();
     const hf = Math.min(1, Math.max(0, L.anchor.y / tree.H));
-    const ao = Math.min(1, Math.max(0.42, 0.38 + 0.75 * Math.pow(d, 1.3))) * (0.8 + 0.2 * hf);
+    const ao = Math.min(1, Math.max(0.32, 0.28 + 0.78 * Math.pow(d, 1.25))) * (0.78 + 0.22 * hf);
     const sway = Math.min(1, 0.35 + 0.65 * d);
-    const corners = [[0, 0], [1, 0], [0, 1], [1, 1]];
-    for (const [cx, cy] of corners) {
-      p.copy(L.anchor).addScaledVector(right, (cx - 0.5) * s).addScaledVector(L.up, (cy - 0.06) * s);
-      pos.push(p.x, p.y, p.z);
-      nor.push(n.x, n.y, n.z);
-      uv.push(u0 + (0.02 + cx * 0.96) * 0.5, v0 + (1 - (0.02 + cy * 0.96)) * 0.5);
-      leaf.push(sway, L.phase, ao, cy);
+    const flag = !lod1 && subset > 0 && i % subset === 0 ? 1 : 0;
+    const u0 = (L.cell % 4) * 0.25, v0 = Math.floor(L.cell / 4) * 0.5;
+    const cols = lod1 ? [-1, 1] : [-1, 0, 1];
+    for (const cy of [0, 1]) {
+      for (const side of cols) {
+        p.copy(L.anchor).addScaledVector(right, side * 0.5 * s).addScaledVector(L.up, (cy - 0.02) * s);
+        pos.push(p.x, p.y, p.z);
+        nor.push(L.nrm.x, L.nrm.y, L.nrm.z);
+        const uu = 0.5 + side * 0.49 * (L.flip ? -1 : 1);
+        uv.push(u0 + uu * 0.25, v0 + (1 - (0.005 + cy * 0.99)) * 0.5);
+        leaf.push(sway, L.phase, ao, cy);
+        ctr.push(L.anchor.x, L.anchor.y, L.anchor.z, flag + 2 * (side + 1) + 6 * (L.flip ? 1 : 0));
+        tan.push(right.x, right.y, right.z);
+      }
     }
-    idx.push(v, v + 1, v + 2, v + 1, v + 3, v + 2);
-    v += 4;
+    if (lod1) idx.push(v, v + 1, v + 2, v + 1, v + 3, v + 2);
+    else idx.push(v, v + 1, v + 3, v + 1, v + 4, v + 3, v + 1, v + 2, v + 4, v + 2, v + 5, v + 4);
+    v += cols.length * 2;
   });
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
   g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
   g.setAttribute('aLeaf', new THREE.Float32BufferAttribute(leaf, 4));
+  g.setAttribute('aCtr', new THREE.Float32BufferAttribute(ctr, 4));
+  g.setAttribute('aTan', new THREE.Float32BufferAttribute(tan, 3));
   g.setIndex(idx);
   g.computeBoundingSphere();
   return g;
 }
 
 // ---------------- materials ----------------
+// uMorph: x..y distance range over which LOD0 turns into LOD1 (y <= x disables), z LOD1 card scale,
+// w height offset matching the CPU's LOD distance point.
+const TREE_PARS = 'uniform float uTreeH; uniform float uSway; uniform vec4 uMorph;';
 const TREE_WIND = /* glsl */`
   vec3 iorg = vec3(0.0);
   float s2 = 1.0;
@@ -244,60 +261,99 @@ const TREE_WIND = /* glsl */`
   float hN = clamp(position.y / uTreeH, 0.0, 1.3);
   vec3 off = vec3(wb.x, 0.0, wb.y) * hN * hN * uSway;
   off.y -= dot(off.xz, off.xz) * 0.25 / uTreeH;
+  float mdist = length(iorg + vec3(0.0, uMorph.w, 0.0) - uCamPos);
+  float mm = uMorph.y > uMorph.x ? smoothstep(uMorph.x, uMorph.y, mdist) : 0.0;
+`;
+const APPLY_OFF = /* glsl */`
+  #ifdef USE_INSTANCING
+  pos += transpose(mat3(instanceMatrix)) * off / s2;
+  #else
+  pos += off;
+  #endif
 `;
 
-function treeWindVertex(isLeaf) {
-  return /* glsl */`
-    vec3 pos = position;
-    vec3 nrm = normal;
-    ${TREE_WIND}
-    ${isLeaf ? `
-      float fl = aLeaf.x * (0.35 + uWind);
-      float ph = aLeaf.y + ph0;
-      off += vec3(sin(uTime * 2.1 + ph), sin(uTime * 1.6 + ph * 1.7) * 0.5, cos(uTime * 1.9 + ph * 0.7)) * fl * 0.06;
-      off += nrm * sin(uTime * 7.0 + ph * 3.0) * 0.025 * fl * aLeaf.w;
-      float ao = aLeaf.z;
-    ` : `
-      float fl = aWind.x * (0.3 + uWind);
-      off += vec3(sin(uTime * 1.7 + aWind.y), 0.0, cos(uTime * 1.5 + aWind.y)) * fl * 0.05;
-      float ao = clamp(0.55 + position.y * 0.12, 0.55, 1.0);
-    `}
-    #ifdef USE_INSTANCING
-    pos += transpose(mat3(instanceMatrix)) * off / s2;
-    #else
-    pos += off;
-    #endif
-  `;
-}
+const LEAF_VERTEX = /* glsl */`
+  ${TREE_WIND}
+  float pk = aCtr.w + 0.5;
+  float flag = mod(floor(pk), 2.0);
+  float side = mod(floor(pk / 2.0), 3.0) - 1.0;
+  vFlip = floor(pk / 6.0) > 0.5 ? -1.0 : 1.0;
+  float sc = flag > 0.5 ? mix(1.0, uMorph.z, mm) : 1.0 - mm;
+  vec3 rel = position - aCtr.xyz;
+  float fold = uFold * (1.0 - mm);
+  float hw = abs(dot(rel, aTan)) * sc;
+  vec3 pos = aCtr.xyz + rel * sc + normal * hw * fold;
+  vec3 nrm = normalize(normal - aTan * side * fold);
+  float fl = aLeaf.x * (0.35 + uWind);
+  float ph = aLeaf.y + ph0;
+  off += vec3(sin(uTime * 2.1 + ph), sin(uTime * 1.6 + ph * 1.7) * 0.5, cos(uTime * 1.9 + ph * 0.7)) * fl * 0.05;
+  off += nrm * sin(uTime * 7.0 + ph * 3.0) * 0.02 * fl * aLeaf.w;
+  float ao = aLeaf.z;
+  ${APPLY_OFF}
+  vVar = fract(aLeaf.y * 7.13);
+  vec3 sph = normalize(aCtr.xyz - uCrown.xyz + vec3(0.0, 0.001, 0.0));
+  #ifdef USE_INSTANCING
+  vTanV = normalize((viewMatrix * vec4(mat3(instanceMatrix) * aTan, 0.0)).xyz);
+  vSphV = normalize((viewMatrix * vec4(mat3(instanceMatrix) * sph, 0.0)).xyz);
+  #else
+  vTanV = normalize((viewMatrix * vec4(aTan, 0.0)).xyz);
+  vSphV = normalize((viewMatrix * vec4(sph, 0.0)).xyz);
+  #endif
+`;
 
-export function makeLeafMaterial(tex, q, sp, fade, isDepth = false) {
-  const uniforms = Object.assign({ uTreeH: { value: 15 }, uSway: { value: 0.6 }, uTint: { value: new THREE.Vector3(...sp.tint) } }, fadeUniforms(fade[0], fade[1]));
+// fade: [[inStart, inEnd], [outStart, outEnd]] distance pairs (dithered, or alpha-faded with MSAA)
+// morph: [start, end, lod1Scale, heightOffset]; fold: V fold of the cards (LOD0 only)
+export function makeLeafMaterial(tex, q, sp, fade, isDepth = false, opts = {}) {
+  const morph = opts.morph || [0, -1, 1, 0];
+  const uniforms = Object.assign({
+    uTreeH: { value: 15 }, uSway: { value: 0.6 }, uTint: { value: new THREE.Vector3(...sp.tint) },
+    uMorph: { value: new THREE.Vector4(...morph) }, uFold: { value: opts.fold ?? 0 },
+    uCrown: { value: new THREE.Vector4(0, 5, 0, 4) },
+    uLeafNormal: { value: tex.leafNormals }, uAtlasSize: { value: new THREE.Vector2(tex.leaves.image.width, tex.leaves.image.height) },
+  }, fadeUniforms(fade[0], fade[1]));
+  const msaa = q.msaa > 0 && !isDepth;
   const mat = isDepth
     ? new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking, map: tex.leaves, alphaTest: 0.5, side: THREE.DoubleSide })
-    : new THREE.MeshLambertMaterial({ map: tex.leaves, alphaTest: 0.5, side: THREE.DoubleSide, alphaToCoverage: q.msaa > 0 });
+    : new THREE.MeshLambertMaterial({ map: tex.leaves, alphaTest: 0.5, side: THREE.DoubleSide, alphaToCoverage: msaa });
   patch(mat, {
     key: isDepth ? 'leafD' : 'leaf',
     uniforms,
-    foliage: isDepth ? null : { translucency: 0.75, wrap: 0.6 },
-    defines: isDepth ? {} : { FOLIAGE_SPEC: '0.12' },
-    vertexPars: 'attribute vec4 aLeaf; uniform float uTreeH; uniform float uSway;' + FADE_GLSL_VS,
-    vertexMain: treeWindVertex(true),
+    foliage: isDepth ? null : { translucency: 0.85, wrap: 0.5 },
+    defines: isDepth ? {} : { FOLIAGE_SPEC: '0.1' },
+    vertexPars: 'attribute vec4 aLeaf; attribute vec4 aCtr; attribute vec3 aTan; uniform float uFold; uniform vec4 uCrown;' +
+      'varying vec3 vTanV; varying vec3 vSphV; varying float vFlip; varying float vVar;' + TREE_PARS + FADE_GLSL_VS,
+    vertexMain: LEAF_VERTEX,
     vertexEnd: FADE_VS,
-    fragmentPars: 'uniform vec3 uTint;' + FADE_GLSL_FS + ALPHA_SHARPEN,
-    fragmentColor: `
-      ${FADE_FS}
-      diffuseColor.rgb *= uTint * (1.0 - uWetness * 0.2);
-      ${q.msaa > 0 && !isDepth ? 'diffuseColor.a = sharpenAlpha(diffuseColor.a, vMapUv, 1024.0, 0.5);' : ''}
+    fragmentPars: 'uniform vec3 uTint; uniform sampler2D uLeafNormal; uniform vec2 uAtlasSize; varying vec3 vTanV; varying vec3 vSphV; varying float vFlip; varying float vVar;' + FADE_GLSL_FS + ALPHA_SHARPEN,
+    fragmentColor: isDepth ? FADE_FS : `
+      ${msaa ? '' : FADE_FS}
+      diffuseColor.rgb *= uTint * (0.88 + 0.24 * vVar) * (1.0 - uWetness * 0.2);
+      // leaf undersides are paler
+      if (!gl_FrontFacing) diffuseColor.rgb *= vec3(1.1, 1.14, 1.0);
+      // cards seen edge-on fade out instead of showing as streaks
+      float facing = abs(dot(normalize(vNormal), normalize(vViewPosition)));
+      float edgeF = smoothstep(0.04, 0.24, facing);
+      ${msaa
+        ? 'diffuseColor.a = sharpenAlpha2(diffuseColor.a, vMapUv, uAtlasSize, 0.5) * edgeF * vFadeIn * (1.0 - vFadeOut);'
+        : 'diffuseColor.a *= mix(0.35, 1.0, edgeF);'}
     `,
-    fragmentAlpha: q.msaa > 0 && !isDepth ? 'if (diffuseColor.a < 0.02) discard;' : undefined,
-    fragmentNormal: 'vec3 normal = normalize(vNormal);',
+    fragmentAlpha: msaa ? 'if (diffuseColor.a < 0.02) discard;' : undefined,
+    fragmentNormal: `
+      vec3 N0 = normalize(vNormal);
+      vec3 T0 = normalize(vTanV - N0 * dot(N0, vTanV));
+      vec3 B0 = cross(N0, T0);
+      vec3 ln = texture2D(uLeafNormal, vMapUv).xyz * 2.0 - 1.0;
+      ln.x *= vFlip;
+      vec3 normal = normalize(T0 * ln.x + B0 * ln.y + N0 * max(ln.z, 0.15)) * faceDirection;
+      normal = normalize(normal + vSphV * 0.45);
+    `,
   });
   mat.userData.u = uniforms;
   return mat;
 }
 
-export function makeBarkMaterial(barkTex, q, fade, birch, isDepth = false) {
-  const uniforms = Object.assign({ uTreeH: { value: 15 }, uSway: { value: 0.6 } }, fadeUniforms(fade[0], fade[1]));
+export function makeBarkMaterial(barkTex, q, fade, birch, isDepth = false, morph = null) {
+  const uniforms = Object.assign({ uTreeH: { value: 15 }, uSway: { value: 0.6 }, uMorph: { value: new THREE.Vector4(...(morph || [0, -1, 1, 0])) } }, fadeUniforms(fade[0], fade[1]));
   const mat = isDepth
     ? new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking })
     : new THREE.MeshLambertMaterial({ map: barkTex });
@@ -305,8 +361,17 @@ export function makeBarkMaterial(barkTex, q, fade, birch, isDepth = false) {
     key: (isDepth ? 'barkD' : 'bark') + (birch ? 'B' : ''),
     uniforms,
     defines: birch ? { BIRCH: '' } : {},
-    vertexPars: 'attribute vec2 aWind; uniform float uTreeH; uniform float uSway; varying float vH;' + FADE_GLSL_VS,
-    vertexMain: treeWindVertex(false) + 'vH = position.y;',
+    vertexPars: 'attribute vec2 aWind; attribute float aShr; varying float vH;' + TREE_PARS + FADE_GLSL_VS,
+    vertexMain: `
+      ${TREE_WIND}
+      vec3 nrm = normal;
+      vec3 pos = position - normal * aShr * mm;
+      float fl = aWind.x * (0.3 + uWind);
+      off += vec3(sin(uTime * 1.7 + aWind.y), 0.0, cos(uTime * 1.5 + aWind.y)) * fl * 0.05;
+      float ao = clamp(0.55 + position.y * 0.12, 0.55, 1.0);
+      ${APPLY_OFF}
+      vH = position.y;
+    `,
     vertexEnd: FADE_VS,
     fragmentPars: 'varying float vH;' + FADE_GLSL_FS,
     fragmentColor: `
@@ -315,7 +380,7 @@ export function makeBarkMaterial(barkTex, q, fade, birch, isDepth = false) {
       diffuseColor.rgb = mix(diffuseColor.rgb * vec3(0.32, 0.3, 0.28), diffuseColor.rgb, smoothstep(0.4, 2.2, vH + texture(uNoiseTex, vMapUv * 0.3).r * 0.8));
       #endif
       diffuseColor.rgb *= mix(vec3(0.75, 0.8, 0.62), vec3(1.0), smoothstep(0.0, 1.6, vH));
-      diffuseColor.rgb *= 1.0 - uWetness * 0.4;
+      diffuseColor.rgb *= 1.3 * (1.0 - uWetness * 0.4);
     `,
   });
   mat.userData.u = uniforms;
@@ -323,27 +388,32 @@ export function makeBarkMaterial(barkTex, q, fade, birch, isDepth = false) {
 }
 
 // ---------------- impostors ----------------
-function bakeMaterial(kind, tex, sp, barkTex) {
+function bakeMaterial(kind, tex, sp, barkTex, crown) {
   // kind: 'leafA' | 'leafN' | 'barkA' | 'barkN'
   const leaf = kind.startsWith('leaf');
   return new THREE.ShaderMaterial({
     side: THREE.DoubleSide,
-    uniforms: { uMap: { value: leaf ? tex.leaves : barkTex }, uTint: { value: new THREE.Vector3(...sp.tint) } },
+    uniforms: { uMap: { value: leaf ? tex.leaves : barkTex }, uTint: { value: new THREE.Vector3(...sp.tint) }, uCrown: { value: crown } },
     vertexShader: /* glsl */`
       ${leaf ? 'attribute vec4 aLeaf;' : ''}
-      varying vec2 vUv; varying vec3 vN; varying float vAO;
+      uniform vec4 uCrown;
+      varying vec2 vUv; varying vec3 vN; varying float vAO; varying vec3 vS;
       void main() {
         vUv = uv; vN = normal;
+        vS = normalize(position - uCrown.xyz + vec3(0.0, 0.001, 0.0));
         vAO = ${leaf ? 'aLeaf.z' : 'clamp(0.55 + position.y * 0.12, 0.55, 1.0)'};
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
       }`,
     fragmentShader: /* glsl */`
       uniform sampler2D uMap; uniform vec3 uTint;
-      varying vec2 vUv; varying vec3 vN; varying float vAO;
+      varying vec2 vUv; varying vec3 vN; varying float vAO; varying vec3 vS;
       void main() {
         vec4 c = texture2D(uMap, vUv);
         ${leaf ? 'if (c.a < 0.5) discard;' : ''}
-        ${kind.endsWith('A') ? `gl_FragColor = vec4(c.rgb * ${leaf ? 'uTint' : 'vec3(1.0)'}, vAO);` : 'gl_FragColor = vec4(normalize(vN) * 0.5 + 0.5, 1.0);'}
+        vec3 n = normalize(vN);
+        if (n.z < 0.0) n = -n;
+        ${leaf ? 'n = normalize(n * 0.55 + vS * 0.8);' : ''}
+        ${kind.endsWith('A') ? `gl_FragColor = vec4(c.rgb * ${leaf ? 'uTint' : 'vec3(1.0)'}, vAO);` : 'gl_FragColor = vec4(n * 0.5 + 0.5, 1.0);'}
       }`,
   });
 }
@@ -354,22 +424,26 @@ export class Trees {
     this.group = new THREE.Group();
     this.variants = [];
     const d0 = q.treeLod0, d1 = q.treeLod1, band = q.lodBand;
-    // fades: lod0 out at d0, lod1 in at d0 / out at d1, impostor in at d1
-    const f0 = [[-2, -1], [d0 - band, d0 + band]];
-    const f1 = [[d0 - band, d0 + band], [d1 - band, d1 + band]];
+    // LOD0 morphs into exactly the LOD1 shape before the hand-off at d0, so the switch is invisible and nothing dithers.
+    // LOD1 fades out at d1 while the impostor fades in.
+    const morph0 = [d0 - 2 * band, d0 - 1.6, LOD1_SCALE, 6];
+    const f0 = [[-2, -1], [1e8, 1e8 + 1]];
+    const f1 = [[-2, -1], [d1 - band, d1 + band]];
     for (let v = 0; v < 8; v++) {
       const sp = SPECIES[v >> 1];
       const t = genTree(sp, 1000 + v * 77, { leafScale: q.leafScale });
-      const lod0 = { trunk: buildTrunkGeometry(t, { maxLevel: 2, radial: [9, 5, 3] }), leaves: buildLeafGeometry(t) };
-      const lod1 = { trunk: buildTrunkGeometry(t, { maxLevel: 1, radial: [6, 4], step: 2 }), leaves: buildLeafGeometry(t, { every: 3, scale: 1.55 }) };
+      const lod0 = { trunk: buildTrunkGeometry(t, { maxLevel: 3, radial: [9, 5, 4, 3], shrinkFrom: 2 }), leaves: buildLeafGeometry(t) };
+      const lod1 = { trunk: buildTrunkGeometry(t, { maxLevel: 1, radial: [6, 4], step: 2 }), leaves: buildLeafGeometry(t, { every: LOD1_EVERY, scale: LOD1_SCALE }) };
       const birch = sp.name === 'birch';
-      const mk = (fade) => {
-        const lm = makeLeafMaterial(tex, q, sp, fade), ld = makeLeafMaterial(tex, q, sp, fade, true);
-        const bm = makeBarkMaterial(tex.bark[sp.bark], q, fade, birch), bd = makeBarkMaterial(null, q, fade, birch, true);
+      const crown = new THREE.Vector4(t.crownC.x, t.crownC.y, t.crownC.z, t.crownR);
+      const mk = (fade, morph, fold) => {
+        const lm = makeLeafMaterial(tex, q, sp, fade, false, { morph, fold }), ld = makeLeafMaterial(tex, q, sp, fade, true, { morph, fold });
+        const bm = makeBarkMaterial(tex.bark[sp.bark], q, fade, birch, false, morph), bd = makeBarkMaterial(null, q, fade, birch, true, morph);
         for (const m of [lm, ld, bm, bd]) { m.userData.u.uTreeH.value = t.H; m.userData.u.uSway.value = sp.name === 'small' ? 0.25 : sp.name === 'birch' ? 0.75 : 0.55; }
+        for (const m of [lm, ld]) m.userData.u.uCrown.value.copy(crown);
         return { lm, ld, bm, bd };
       };
-      this.variants.push({ sp, tree: t, lod0, lod1, m0: mk(f0), m1: mk(f1) });
+      this.variants.push({ sp, tree: t, crown, lod0, lod1, m0: mk(f0, morph0, FOLD), m1: mk(f1, null, 0) });
     }
     // instance data
     const T = world.trees, n = T.length / 8;
@@ -397,7 +471,7 @@ export class Trees {
       this.group.add(tr0, lf0, tr1, lf1);
       return [[tr0, lf0], [tr1, lf1]];
     });
-    this.chunked = new ChunkedInstances({ matrices, pos, variant }, [d0, d1], band, meshes);
+    this.chunked = new ChunkedInstances({ matrices, pos, variant }, [d0, d1], band, meshes, 2048, { exclusive: true });
     this.chunked.sortRadii = [q.cascadeSplits[0] + 14, (q.cascadeSplits[1] || 60) + 22];
     this.instanceCaps = [q.treeCap0, q.treeCap1];
     this.bakeImpostors(renderer, tex, world);
@@ -426,7 +500,8 @@ export class Trees {
       renderer.clear();
       this.variants.forEach((V, v) => {
         const t = V.tree;
-        const box = new THREE.Box3().setFromBufferAttribute(V.lod0.leaves.attributes.position);
+        const box = new THREE.Box3().setFromBufferAttribute(V.lod1.leaves.attributes.position);
+        box.union(new THREE.Box3().setFromBufferAttribute(V.lod0.leaves.attributes.position));
         box.union(new THREE.Box3().setFromBufferAttribute(V.lod0.trunk.attributes.position));
         const halfW = Math.max(Math.abs(box.min.x), Math.abs(box.max.x), Math.abs(box.min.z), Math.abs(box.max.z)) * 1.02;
         const bottom = -0.5, top = box.max.y * 1.02;
@@ -434,8 +509,8 @@ export class Trees {
         cam.left = -halfW; cam.right = halfW; cam.top = top; cam.bottom = bottom;
         cam.position.set(0, 0, 100); cam.lookAt(0, 0, 0);
         cam.updateProjectionMatrix();
-        const trunk = new THREE.Mesh(V.lod0.trunk, bakeMaterial('bark' + suffix, tex, V.sp, tex.bark[V.sp.bark]));
-        const leaves = new THREE.Mesh(V.lod0.leaves, bakeMaterial('leaf' + suffix, tex, V.sp));
+        const trunk = new THREE.Mesh(V.lod0.trunk, bakeMaterial('bark' + suffix, tex, V.sp, tex.bark[V.sp.bark], V.crown));
+        const leaves = new THREE.Mesh(V.lod1.leaves, bakeMaterial('leaf' + suffix, tex, V.sp, null, V.crown));
         scene.add(trunk, leaves);
         const cx = (v % 4) * S, cy = Math.floor(v / 4) * S;
         rt.viewport.set(cx, cy, S, S); rt.scissor.set(cx, cy, S, S); rt.scissorTest = true;
@@ -524,11 +599,11 @@ export class Trees {
         varying vec2 vAtlasUv; varying vec3 vR; varying vec3 vF; varying float vFade;
       ` + ALPHA_SHARPEN,
       fragmentColor: /* glsl */`
-        if (vFade <= ign(gl_FragCoord.xy)) discard;
+        ${q.msaa > 0 ? '' : 'if (vFade <= ign(gl_FragCoord.xy)) discard;'}
         float bakedAO = diffuseColor.a;
         vec4 nt = texture2D(uNormalAtlas, vAtlasUv);
         diffuseColor.a = nt.a;
-        ${q.msaa > 0 ? 'diffuseColor.a = sharpenAlpha(diffuseColor.a, vAtlasUv, ' + (S * 4).toFixed(1) + ', 0.5);' : ''}
+        ${q.msaa > 0 ? 'diffuseColor.a = sharpenAlpha2(diffuseColor.a, vAtlasUv, vec2(' + (S * 4).toFixed(1) + ', ' + (S * 2).toFixed(1) + '), 0.5) * vFade;' : ''}
         diffuseColor.rgb *= 1.0 - uWetness * 0.2;
         gImpAO = bakedAO;
       `,

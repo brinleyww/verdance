@@ -47,7 +47,11 @@ export function fadeUniforms(fadeIn, fadeOut) {
  * meshes: meshes[variant][lod] = [InstancedMesh, ...] (all meshes of one LOD get the same matrices)
  */
 export class ChunkedInstances {
-  constructor(items, lods, band, meshes, worldSize = 2048) {
+  // opts.exclusive: each item sits in exactly one LOD (the materials morph across the boundary instead of crossfading);
+  // opts.endBand: how far past the last LOD items stay drawn (defaults to band, for a fade-out)
+  constructor(items, lods, band, meshes, worldSize = 2048, opts = {}) {
+    this.exclusive = !!opts.exclusive;
+    this.endBand = opts.endBand ?? band;
     this.items = items;
     this.lods = lods;
     this.band = band;
@@ -77,7 +81,7 @@ export class ChunkedInstances {
     this._s = new THREE.Sphere();
     this._last = new THREE.Vector3(1e9, 0, 0);
     this._lastQ = new THREE.Quaternion();
-    this.maxD = lods[lods.length - 1] + band;
+    this.maxD = lods[lods.length - 1] + Math.max(band, this.endBand);
   }
 
   update(camera, force = false) {
@@ -87,7 +91,7 @@ export class ChunkedInstances {
     this._m.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
     this._frustum.setFromProjectionMatrix(this._m);
     const { matrices, pos, variant } = this.items;
-    const lods = this.lods, band = this.band, nl = lods.length;
+    const lods = this.lods, band = this.band, nl = lods.length, ex = this.exclusive, endBand = this.endBand;
     const meshes = this.meshes;
     const maxD = this.maxD;
     // gather (index, distance) per variant/LOD
@@ -105,11 +109,11 @@ export class ChunkedInstances {
         const i = idx[k];
         const dx = pos[i * 4] - p.x, dy = pos[i * 4 + 1] - p.y, dz = pos[i * 4 + 2] - p.z;
         const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
-        if (d > pos[i * 4 + 3] + band) continue;
+        if (d > pos[i * 4 + 3] + endBand) continue;
         const v = variant[i];
         for (let l = 0; l < nl; l++) {
-          const lo = l === 0 ? -1e9 : lods[l - 1] - band;
-          const hi = lods[l] + band;
+          const lo = l === 0 ? -1e9 : lods[l - 1] - (ex ? 0 : band);
+          const hi = l === nl - 1 ? lods[l] + endBand : lods[l] + (ex ? 0 : band);
           if (d >= lo && d < hi && meshes[v][l]) bins[v][l].push(d, i);
         }
       }
