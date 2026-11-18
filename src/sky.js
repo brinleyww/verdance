@@ -139,32 +139,38 @@ float HG(float c, float g) { float g2 = g * g; return (1.0 - g2) / pow(1.0 + g2 
 float stB() { return mix(1150.0, 650.0, uStratus); }
 float stT() { return stB() + mix(300.0, 1100.0, uStratus); }
 
-// local coverage (x) and tower potential (y) from the weather map; matches cloudShadowAt() on the ground
-vec2 weatherAt(vec2 xz, bool lite) {
+// local coverage (x), tower potential (y) and a smooth large-scale coverage (z) from the weather map;
+// x matches cloudShadowAt() on the ground
+vec3 weatherAt(vec2 xz, bool lite) {
   vec2 wuv = (xz + uCloudOffset) / 15000.0;
   vec4 a = textureLod(uWeatherMap, wuv, 0.0);
   float cov = lite ? a.r * 0.7 + 0.15 : a.r * 0.7 + textureLod(uWeatherMap, wuv * 3.1 + 0.37, 0.0).g * 0.3;
   float c = smoothstep(1.0 - uCloudCover, 1.0 - uCloudCover + 0.3, cov);
   float big = lite ? 0.5 : textureLod(uWeatherMap, wuv * 0.35 + 0.17, 0.0).b;
-  return vec2(c, big);
+  // cloud height must not follow the fine coverage: it changes across a single cloud and would pull the top
+  // into a cone where coverage peaks, so heights come from the 15 km field only and stay level across a cloud
+  float cL = smoothstep(1.0 - uCloudCover - 0.05, 1.0 - uCloudCover + 0.35, a.r * 0.7 + 0.15);
+  return vec3(c, big, cL);
 }
 
+float gCel = 0.0;  // strength of the stratus cell at the last density() sample (set as a side effect)
+float gDeck = 0.0; // 1 when the last density() sample came from the stratus deck
 // density; hRel returns the height inside the cloud (0 base .. 1 top) for ambient shading
 float density(vec3 p, float alt, bool detail, bool lite, out float hRel) {
   hRel = 0.5;
-  vec2 w = weatherAt(p.xz, lite);
+  vec3 w = weatherAt(p.xz, lite);
   vec3 wind = vec3(uCloudOffset.x, 0.0, uCloudOffset.y);
   float d = 0.0;
   // cumulus: flat base, small cells stay low and flat, dense cells tower; dome-shaped height profile
   float hc = (alt - CU_B) / CU_H;
   if (w.x > 0.001 && hc > 0.0 && hc < 1.0) {
-    float c2 = w.x * w.x;
-    float topF = (mix(0.07, 0.42, c2) + 0.5 * c2 * smoothstep(0.5, 0.8, w.y)) * mix(0.75, 1.0, uCloudCover);
+    float c2 = w.z * w.z;
+    float topF = (mix(0.13, 0.44, c2) + 0.5 * c2 * smoothstep(0.5, 0.8, w.y)) * mix(0.8, 1.0, uCloudCover);
     float r = hc / topF;
     if (r < 1.0) {
-      // keeps its width most of the way up, then rounds off
+      // keeps its width most of the way up, then rounds off into a dome (a plain sqrt(1 - r^2) dome peaks again)
       float r2 = r * r;
-      float prof = smoothstep(0.0, 0.05 / topF, r) * sqrt(max(1.0 - r2 * r2, 0.0));
+      float prof = smoothstep(0.0, 0.05 / topF, r) * sqrt(max(1.0 - r2 * r, 0.0));
       vec4 n = textureLod(uNoise3D, (p + wind) / 4200.0, 0.0);
       float base = clamp(remap(n.r, n.g * 0.42 - 0.3, 1.0, 0.0, 1.0), 0.0, 1.0);
       base = base * base * (3.0 - 2.0 * base);
@@ -180,21 +186,41 @@ float density(vec3 p, float alt, bool detail, bool lite, out float hRel) {
       d = sh;
     }
   }
-  // stratiform deck for overcast, rain and storm: wide, softly undulating base
-  if (uStratus > 0.0) {
-    float hs = (alt - stB()) / (stT() - stB());
+  // stratiform deck for overcast, rain and storm. Not a flat sheet: stratocumulus cells in rolls across the wind,
+  // thick cores hanging lower and reading darker, thin seams between them where the light glows through; in rain
+  // and storm the deck drops, thickens, frays and trails soft virga under the heavy cores
+  float rag = smoothstep(0.55, 0.9, uCloudDark);
+  float b0 = stB() - 140.0 * rag;
+  // cheap altitude test first: the cell lookup below is only needed inside the deck's possible span
+  // a very thin deck (cloudy weather) almost never forms: skip it rather than pay for lookups on every ray
+  if (uStratus > 0.2 && alt < stT() && alt > b0 - 160.0 * uStratus - 50.0 - 170.0 * step(0.001, rag)) {
+    vec3 sq = p + wind * 0.8;
+    vec4 ce = textureLod(uNoise3D, vec3(sq.x / 3300.0 + sq.z / 9500.0, alt / 2600.0, sq.z / 2000.0), 0.0);
+    float cel = smoothstep(0.22, 0.82, ce.g);
+    gCel = max(gCel, cel);
+    float base = b0 - cel * mix(70.0, 160.0, uStratus) - (ce.b - 0.5) * 100.0;
+    float top = stT();
+    float hs = (alt - base) / (top - base);
     if (hs > 0.0 && hs < 1.0) {
-      float sp = smoothstep(0.0, 0.18, hs) * smoothstep(1.0, 0.5, hs);
+      float sp = smoothstep(0.0, 0.12, hs) * smoothstep(1.0, 0.45, hs);
       vec4 n2 = textureLod(uNoise3D, (p + wind * 0.7) * vec3(1.0 / 7000.0, 1.0 / 2200.0, 1.0 / 7000.0), 0.0);
-      float cov = uStratus * mix(0.62, 1.0, w.x);
+      float cov = uStratus * mix(0.6, 1.0, w.x) * mix(0.7, 1.12, cel);
       float sb = clamp(remap(n2.r * sp, 1.0 - cov, 1.0, 0.0, 1.0), 0.0, 1.0);
       if (sb > 0.0 && detail) {
         // ragged, undulating underside
         float dn = textureLod(uNoise3D, (p + wind) / 1300.0, 0.0).a;
-        sb = clamp(remap(sb, dn * 0.5 * (1.0 - hs), 1.0, 0.0, 1.0), 0.0, 1.0);
+        sb = clamp(remap(sb, dn * mix(0.5, 0.8, rag) * (1.0 - hs), 1.0, 0.0, 1.0), 0.0, 1.0);
       }
-      sb *= 0.5 * uStratus * mix(0.7, 1.15, n2.a);
-      if (sb > d) { d = sb; hRel = hs; }
+      sb *= 0.5 * uStratus * mix(0.7, 1.15, n2.a) * mix(0.45, 1.35, cel) * (1.0 + rag * 0.45);
+      // ambient by absolute height in the deck, so the hanging cores sit in darker light than the seams
+      float hA = clamp((alt - (b0 - 210.0)) / (top - b0 + 210.0), 0.0, 1.0);
+      if (sb > d) { d = sb; hRel = hA * 0.8; gDeck = 1.0; }
+    } else if (rag > 0.0 && alt < base && alt > base - 170.0) {
+      // virga: soft streaks of rain hanging under the heavy cores
+      float vz = (base - alt) / 170.0;
+      float st = textureLod(uNoise3D, vec3(sq.x / 600.0, alt / 9000.0, sq.z / 600.0), 0.0).r;
+      float vg = rag * cel * smoothstep(0.45, 0.8, st) * (1.0 - vz) * (1.0 - vz) * 0.08 * uStratus;
+      if (vg > d) { d = vg; hRel = 0.0; gDeck = 1.0; }
     }
   }
   return d * uCloudDensity;
@@ -208,8 +234,11 @@ void main() {
   }
   vec3 rd = panoDir(vUv);
   vec3 ro = vec3(0.0, max(uCamPos.y, 0.0), 0.0);
-  if (rd.y < 0.01) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
-  float lo = uStratus > 0.0 ? min(stB(), CU_B) : CU_B;
+  if (rd.y < 0.01 * (1.0 - uStratus)) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
+  float rag0 = smoothstep(0.55, 0.9, uCloudDark);
+  // start exactly at the deck's lowest possible point (hanging cores plus virga), never at or below the camera:
+  // every metre of empty air below it costs march steps
+  float lo = uStratus > 0.2 ? min(max(stB() - 140.0 * rag0 - 160.0 * uStratus - 50.0 - 170.0 * step(0.001, rag0), ro.y + 80.0), CU_B) : CU_B;
   float t0 = shellT(ro, rd, lo);
   float t1 = shellT(ro, rd, CU_B + CU_H);
   float maxT = 45000.0;
@@ -240,17 +269,27 @@ void main() {
       t += coarse;
       continue;
     }
+    gCel = 0.0; gDeck = 0.0;
     float d = density(p, alt, true, false, hRel);
+    float celHere = gCel, deckHere = gDeck;
     if (d > 0.0005) {
       zeros = 0;
-      // light march toward the sun with growing steps
-      float ld = 0.0, ls = 35.0, dum;
-      vec3 lp = p;
-      for (int j = 0; j < 8; j++) {
-        if (float(j) >= uLightSteps) break;
-        lp += uSunDir * ls;
-        ld += density(lp, altitude(lp), false, true, dum) * ls;
-        ls *= 1.85;
+      float ld = 0.0;
+      if (deckHere > 0.5) {
+        // inside the deck the sun's path runs up through the deck above: estimate it from the local cell
+        // instead of marching it (as far as the light march would reach), so thin seams still glow
+        float above = min(max(stT() - alt, 0.0) / max(uSunDir.y, 0.12), 440.0);
+        ld = above * 0.32 * uStratus * uCloudDensity * mix(0.45, 1.35, celHere);
+      } else {
+        // light march toward the sun with growing steps
+        float ls = 35.0, dum;
+        vec3 lp = p;
+        for (int j = 0; j < 8; j++) {
+          if (float(j) >= uLightSteps) break;
+          lp += uSunDir * ls;
+          ld += density(lp, altitude(lp), false, true, dum) * ls;
+          ls *= 1.85;
+        }
       }
       // multiple-scattering approximation (three octaves) with a dual-lobe phase: silver lining near the sun
       float lum = 0.0;
@@ -264,6 +303,8 @@ void main() {
       // powder: thin edges facing away from the sun look darker
       float powder = mix(1.0 - exp(-ext * 70.0), 1.0, 0.45 + 0.55 * max(mu, 0.0));
       vec3 amb = mix(uAmbBottom, uAmbTop, pow(clamp(hRel, 0.0, 1.0), 0.7)) * (1.0 - uCloudDark * 0.35);
+      // thick deck cores are darker underneath, the thin seams between them lighter
+      amb *= mix(1.12, 0.66, celHere * smoothstep(0.0, 0.3, uStratus));
       vec3 Ls = sunC * (lum * powder * 0.5) + amb;
       float Tr = exp(-ext * fine);
       float wgt = T * (1.0 - Tr);
@@ -274,15 +315,18 @@ void main() {
       zeros++;
       if (zeros > 5) inCloud = false;
     }
-    t += fine;
+    // steps grow as the ray goes opaque: deep inside, little of what is left reaches the eye
+    t += fine * (1.0 + (1.0 - T) * 1.4);
   }
   // aerial perspective on distant clouds
   float th = tsum > 0.0 ? tw / tsum : t0;
   float fade = 1.0 - exp(-th / 18000.0);
-  vec3 haze = skyRadiance(normalize(vec3(rd.x, max(rd.y, 0.02), rd.z)));
+  vec3 haze = skyRadiance(normalize(vec3(rd.x, max(rd.y, 0.02), rd.z))) * (1.0 - uCloudDark * 0.3);
   S = mix(S, haze * (1.0 - T), fade * 0.9);
   T = mix(T, 1.0, fade * 0.3);
-  float horizonFade = smoothstep(0.01, 0.05, rd.y);
+  // fair-weather clouds thin out at the horizon; an overcast deck runs right down into the haze, so no bright
+  // strip of open sky shows under it
+  float horizonFade = mix(smoothstep(0.01, 0.05, rd.y), smoothstep(0.0, 0.01, rd.y), uStratus);
   S *= horizonFade; T = mix(1.0, T, horizonFade);
   gl_FragColor = vec4(S, T);
 }
