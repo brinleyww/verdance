@@ -556,10 +556,14 @@ export class Drone {
   // somewhere clear in front of the pilot: open ground beats tall grass, straight ahead beats off to the side
   findSpot(yaw) {
     let best = null, bs = 1e9;
-    for (const off of [0, 0.3, -0.3, 0.6, -0.6, 0.9, -0.9, 1.2, -1.2]) for (const d of [1.25, 1.5, 1.8, 2.15]) {
+    for (const off of [0, 0.25, -0.25, 0.5, -0.5, 0.75, -0.75, 1.0, -1.0, 1.3, -1.3]) for (const d of [1.25, 1.5, 1.8, 2.15, 2.6, 3.0]) {
       const s = this.spot(yaw + off, d);
       if (!this.spotOk(s)) continue;
-      const score = this.world.grassAt(s.x, s.z) * 2.2 + Math.abs(off) * 0.3 + Math.abs(d - 1.3) * 0.35;
+      // grass anywhere near the spot hides the drone; a path or bare patch is worth a short reach
+      const w = this.world;
+      const g = Math.max(w.grassAt(s.x, s.z), w.grassAt(s.x + 0.8, s.z), w.grassAt(s.x - 0.8, s.z), w.grassAt(s.x, s.z + 0.8), w.grassAt(s.x, s.z - 0.8));
+      const path = w.pathAt ? w.pathAt(s.x, s.z) : 0;
+      const score = g * 3.2 - path * 1.2 + Math.abs(off) * 0.25 + Math.abs(d - 1.4) * 0.3;
       if (score < bs) { bs = score; best = s; }
     }
     return best;
