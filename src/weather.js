@@ -176,7 +176,9 @@ export class Environment {
     skyRadianceJS(d.set(-sd.x, 0.03, -sd.z).normalize(), sd, s.overcast, skyB, G.uFogColor.value);
     skyRadianceJS(d.set(sd.x, 0.03, sd.z).normalize(), sd, s.overcast, skyB, G.uFogSunColor.value);
     // thick fog takes the colour of the overcast horizon, so far hills fade into the sky instead of glowing
-    G.uFogColor.value.lerp(new THREE.Color(0.41, 0.43, 0.46).multiplyScalar(skyB), Math.min(1, s.fog * 160 + s.overcast * 0.5));
+    // under a heavy rain deck the distance greys to the deck's own dark underside, not a lighter band
+    const deckDark = 1 - 0.75 * Math.max(0, s.dark - 0.45);
+    G.uFogColor.value.lerp(new THREE.Color(0.41, 0.43, 0.46).multiplyScalar(skyB * deckDark), Math.min(1, s.fog * 160 + s.overcast * 0.5));
     G.uFogSunColor.value.lerp(G.uFogColor.value, s.overcast * 0.7);
     this.sky.uniforms.uAmbTop.value.copy(zen).multiplyScalar(1.15).lerp(cloudAmb, s.overcast * 0.6);
     this.sky.uniforms.uAmbBottom.value.copy(bounce).multiplyScalar(0.8).add(new THREE.Color(0.05, 0.055, 0.06).multiplyScalar(skyB));
