@@ -18,6 +18,7 @@ import { Player, setupTouch } from './player.js';
 import { Game } from './game.js';
 import { Post } from './post.js';
 import { Soundscape } from './audio.js';
+import { Drone } from './drone.js';
 
 const $ = (id) => document.getElementById(id);
 const SETTINGS_KEY = 'verdance-settings-v1';
@@ -127,7 +128,9 @@ async function boot() {
   scene.add(rain.mesh);
 
   const game = new Game({ world, structures, player, audio, env, camera });
-  Object.assign(window.__verdance, { player, env, game, camera, renderer, world, trees, grass, sky, structures, terrain, props, cliffs, scene, settings, audio });
+  const drone = new Drone({ scene, camera, player, world, cliffs, audio, game, envMap: envTex });
+  game.drone = drone;
+  Object.assign(window.__verdance, { player, env, game, camera, renderer, world, trees, grass, sky, structures, terrain, props, cliffs, scene, settings, audio, drone });
   const post = new Post(renderer, scene, camera, q, shadows, G);
   window.__verdance.post = post;
 
@@ -223,7 +226,7 @@ async function boot() {
     $('title').classList.add('hidden');
     $('pause').classList.add('hidden');
     playing = true; paused = false;
-    player.enabled = true;
+    player.enabled = !drone.busy;   // the drone keeps the controls until it is stowed
     try { await audio.start(); audio.resume(); } catch { /* audio blocked */ }
     if (isTouch) $('touch').classList.remove('hidden');
     lock();
@@ -250,6 +253,7 @@ async function boot() {
       else { game.toggleMap(true); }
     }
     if (e.code === 'KeyH' && playing) { hudOff = !hudOff; $('hud').classList.toggle('off', hudOff); }
+    if (e.code === 'KeyF' && playing && !paused && !game.mapOpen && !e.repeat) drone.toggle();
     if (e.code === 'Escape' && game.mapOpen) { game.toggleMap(false); }
   });
   $('map').addEventListener('click', () => { game.toggleMap(false); if (playing && !paused) lock(); });
@@ -305,12 +309,18 @@ async function boot() {
     G.uTime.value = time;
     frameEma = frameEma * 0.95 + dtRaw * 1000 * 0.05;
 
-    if (playing && !paused) player.update(dt);
+    if (playing && !paused) {
+      player.update(dt);
+      drone.update(dt, { input: !!document.pointerLockElement || isTouch });
+    }
     camera.updateMatrixWorld();
     G.uCamPos.value.copy(camera.position);
     env.update(dt);
     terrain.update(camera.position);
-    grass.update(camera);
+    // high above the ground (the drone) blades are sub-pixel and the terrain already paints the grass colour
+    const camAbove = camera.position.y - world.heightAt(camera.position.x, camera.position.z);
+    grass.group.visible = grass.group.visible ? camAbove < 40 : camAbove < 34;
+    if (grass.group.visible) grass.update(camera);
     trees.update(camera);
     props.update(camera);
     cliffs.update(camera);
@@ -318,6 +328,7 @@ async function boot() {
     water.update(camera, time, env.s.rain);
     rain.update(env.s.rain, sky.uniforms.uSkyBright.value);
     structures.update(time, dt);
+    game.blocked = drone.busy;
     if (playing) game.update(dt);
 
     envTimer -= dt;
@@ -326,14 +337,16 @@ async function boot() {
       const t = sky.updateEnv();
       if (t) for (const m of structures.materials) { m.envMap = t; }
       if (t) structures.sphereMat.envMap = t;
+      if (t) drone.setEnv(t);
     }
 
     // audio
     if (audio.started) {
-      const p = player.pos;
+      // ambience follows whichever camera is live: the pilot, or the drone
+      const p = drone.feed ? camera.position : player.pos;
       aState.camRight.set(1, 0, 0).applyQuaternion(camera.quaternion);
       aState.camForward.set(0, 0, -1).applyQuaternion(camera.quaternion);
-      aState.speed = player.speed;
+      aState.speed = drone.feed ? 0 : player.speed;
       aState.forest = world.forestAt(p.x, p.z);
       const s = env.s;
       aState.wind = s.wind; aState.rain = s.rain; aState.fog = Math.min(1, s.fog * 200); aState.storm = s.storm;

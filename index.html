@@ -48,6 +48,7 @@
         <span><kbd>Shift</kbd> run</span>
         <span><kbd>E</kbd> hold to use</span>
         <span><kbd>R</kbd> hold radio</span>
+        <span><kbd>F</kbd> drone</span>
         <span><kbd>M</kbd> map</span>
         <span><kbd>H</kbd> hide HUD</span>
         <span><kbd>Esc</kbd> menu</span>
@@ -63,7 +64,20 @@
     <div id="area"></div>
     <div id="radio-ind"><span></span><span></span><span></span><span></span><span></span></div>
     <div id="fps"></div>
+    <div id="drone-hud">
+      <div class="dh-frame"><i></i><i></i><i></i><i></i></div>
+      <div class="dh-tl"><span class="dh-rec"><b></b>REC <span id="dh-rec">00:00</span></span><span id="dh-mode">NORMAL</span></div>
+      <div class="dh-tc" id="dh-head">N 000°</div>
+      <div class="dh-tr"><span id="dh-sig" class="dh-sig"><i></i><i></i><i></i><i></i></span><span class="dh-bat"><i id="dh-bat-fill"></i></span><span id="dh-batp">100%</span></div>
+      <svg class="dh-att" viewBox="-30 -30 60 60"><circle r="27" class="ring"/><g id="dh-horizon"><line x1="-20" y1="0" x2="-6" y2="0"/><line x1="6" y1="0" x2="20" y2="0"/><line x1="-3" y1="-9" x2="3" y2="-9" class="minor"/><line x1="-3" y1="9" x2="3" y2="9" class="minor"/></g><path d="M-9 4 L0 -2 L9 4" class="plane"/></svg>
+      <div class="dh-bottom"><span>H <b id="dh-h">0.0</b> m</span><span>D <b id="dh-d">0</b> m</span><span>H.S <b id="dh-hs">0.0</b> m/s</span><span>V.S <b id="dh-vs">0.0</b> m/s</span></div>
+      <div id="dh-warn"></div>
+      <div class="dh-keys"><kbd>W A S D</kbd> fly · <kbd>Space</kbd>/<kbd>C</kbd> up/down · <kbd>Shift</kbd> sport · wheel speed · <kbd>F</kbd> return</div>
+    </div>
   </div>
+  <div id="feed-fx"></div>
+  <canvas id="feed-noise"></canvas>
+  <div id="feed-cut"></div>
 
   <div id="map" class="overlay">
     <div class="paper">

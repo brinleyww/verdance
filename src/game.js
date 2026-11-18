@@ -99,7 +99,7 @@ export class Game {
 
     // interaction
     let target = null;
-    for (const r of this.relays) {
+    for (const r of this.blocked ? [] : this.relays) {
       if (r.active) continue;
       const dx = r.cabinet.x - cam.position.x, dy = r.cabinet.y - cam.position.y, dz = r.cabinet.z - cam.position.z;
       const d = Math.hypot(dx, dy, dz);
@@ -242,6 +242,19 @@ export class Game {
     const [sx, sy] = toM(SPHERE.x, SPHERE.z);
     ctx.fillStyle = '#e8dfc8';
     ctx.fillText('the sphere', sx, sy + 4);
+    // the drone, while it is out
+    const dr = this.drone;
+    if (dr && dr.busy && dr.group.visible) {
+      const [qx, qy] = toM(dr.pos.x, dr.pos.z);
+      ctx.save();
+      ctx.translate(qx, qy);
+      ctx.rotate(-dr.yaw);
+      ctx.strokeStyle = '#1f3a52'; ctx.lineWidth = 1.6;
+      ctx.beginPath(); ctx.moveTo(-5, -5); ctx.lineTo(5, 5); ctx.moveTo(5, -5); ctx.lineTo(-5, 5); ctx.stroke();
+      ctx.fillStyle = '#f5eedc';
+      for (const [ax, ay] of [[-5, -5], [5, -5], [-5, 5], [5, 5]]) { ctx.beginPath(); ctx.arc(ax, ay, 2.6, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); }
+      ctx.restore();
+    }
     const p = this.player.pos;
     const [px, py] = toM(p.x, p.z);
     ctx.save();

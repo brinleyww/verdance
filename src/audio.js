@@ -481,6 +481,15 @@ export class Soundscape {
     return this._ready;
   }
 
+  // for systems that synthesise their own sounds (the drone): the shared context and the world bus (fades on pause)
+  get context() {
+    return this._ready ? this._ctx : null;
+  }
+
+  get worldBus() {
+    return this._ready ? this._world : null;
+  }
+
   async start() {
     if (this._ctx) {
       this._userSuspended = false;
