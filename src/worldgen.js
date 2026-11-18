@@ -340,7 +340,7 @@ export function generateWorld(seed = 1337, progress = () => {}) {
     f *= corridor(x, z);
     return clamp(f, 0, 1);
   };
-  function corridor(x, z) {
+  function corridorDist(x, z) {
     let best = 1e9;
     for (let s = 0; s < POWERLINE.length - 1; s++) {
       const a = POWERLINE[s], b = POWERLINE[s + 1];
@@ -348,7 +348,10 @@ export function generateWorld(seed = 1337, progress = () => {}) {
       const t = clamp(((x - a[0]) * dx + (z - a[1]) * dz) / (dx * dx + dz * dz), 0, 1);
       best = Math.min(best, Math.hypot(x - a[0] - dx * t, z - a[1] - dz * t));
     }
-    return smoothstep(12, 26, best);
+    return best;
+  }
+  function corridor(x, z) {
+    return smoothstep(16, 30, corridorDist(x, z));
   }
   const forest = new Float32Array(M * M);
   for (let j = 0; j < M; j++) {
@@ -418,6 +421,7 @@ export function generateWorld(seed = 1337, progress = () => {}) {
     if (trailDist[k] < 1.6 + rad) return true;
     for (const r of RELAYS) if (Math.hypot(x - r.x, z - r.z) < 13 + rad) return true;
     for (const p of PYLONS) if (Math.hypot(x - p.x, z - p.z) < 26 + rad) return true;
+    for (const p of POWERLINE) if (Math.hypot(x - p[0], z - p[1]) < 9 + rad) return true;
     if (Math.abs(z - chasmCentre(x)) < chasmHalfWidth(x) + 6) return true;
     if (Math.hypot(x - SPAWN.x, z - SPAWN.z) < 6) return true;
     return false;
@@ -453,6 +457,7 @@ export function generateWorld(seed = 1337, progress = () => {}) {
       if (rnd() > p) continue;
       if (slopeAt(x, z) > 0.9) continue;
       if (blocked(x, z, 2.5)) continue;
+      if (corridorDist(x, z) < 21) continue; // cleared strip under the wires
       const sp = f < 0.05 ? (rnd() < 0.62 ? 0 : 1) : speciesAt(x, z, rnd());
       const variant = sp * 2 + (rnd() < 0.5 ? 0 : 1);
       let scale = 0.78 + rnd() * 0.42;

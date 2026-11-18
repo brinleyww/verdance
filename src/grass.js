@@ -130,7 +130,7 @@ export class Grass {
     });
     // flowers: fewer, same tiles
     const fl = makeBlades(Math.round(q.flowerDensity * TILE * TILE), 77);
-    this.flowerLods = [fl, fl.slice(0, Math.ceil(fl.length * frac1)), fl.slice(0, Math.ceil(fl.length * frac2))].map((b) => {
+    this.flowerLods = [fl].map((b) => {
       const g = flowerGeometry(b);
       const arr = new Float32Array(this.maxTiles * 2);
       const attr = new THREE.InstancedBufferAttribute(arr, 2);
@@ -179,8 +179,10 @@ export class Grass {
         const lod = dn < d1 ? 0 : dn < d2 ? 1 : 2;
         const l = this.lods[lod];
         l.arr[l.n * 2] = ox; l.arr[l.n * 2 + 1] = oz; l.n++;
-        const f = this.flowerLods[lod];
-        f.arr[f.n * 2] = ox; f.arr[f.n * 2 + 1] = oz; f.n++;
+        if (dn < d2) {
+          const f = this.flowerLods[0];
+          f.arr[f.n * 2] = ox; f.arr[f.n * 2 + 1] = oz; f.n++;
+        }
       }
     }
     for (const l of this.lods.concat(this.flowerLods)) {
@@ -277,14 +279,15 @@ function makeFlowerMaterial(uniforms, flowerTex, q) {
       vec4 gm = groundMask(xz);
       vec4 nz = texture(uNoiseTex, xz * 0.006 + 0.3);
       float patchF = smoothstep(0.45, 0.7, nz.g) * gm.g * (1.0 - gm.r);
-      float D = densityAt(dist) * patchF;
-      float vis = clamp((D - rnk) / 0.04, 0.0, 1.0);
-      float widen = 1.0 + (1.0 - clamp(D, 0.08, 1.0)) * 1.2;
+      // presence depends only on the patch, never on distance, so flowers never grow in as you walk up;
+      // they only shrink in the last few metres of their range where they are a pixel or two wide
+      float vis = clamp((patchF - rnk) / 0.04, 0.0, 1.0);
+      float nearF = 1.0 - smoothstep(uR1 * 0.8, uR1, dist);
       float kindSel = fract(r * 11.3);
       // 0 buttercup (most), 1 daisy, 2 umbel, 3 clover
       float kind = kindSel < 0.6 ? 0.0 : kindSel < 0.75 ? 1.0 : kindSel < 0.9 ? 2.0 : 3.0;
       float hgt = (kind == 2.0 ? mix(0.7, 1.1, fract(r * 5.3)) : kind == 3.0 ? 0.2 : mix(0.35, 0.75, fract(r * 5.3))) * vis;
-      float hs = (kind == 2.0 ? 0.075 : kind == 3.0 ? 0.03 : 0.038) * widen * vis;
+      float hs = (kind == 2.0 ? 0.062 : kind == 3.0 ? 0.03 : 0.038) * vis * nearF;
       vec2 w = windBend(xz, r * 6.28) * 0.8;
       vec2 lean = vec2(cos(r * 40.0), sin(r * 40.0)) * 0.15;
       vec2 bend = w + lean;
@@ -297,7 +300,8 @@ function makeFlowerMaterial(uniforms, flowerTex, q) {
         float t = position.y;
         float ang = r * 6.28;
         vec2 perp = vec2(-sin(ang), cos(ang));
-        pos.xz = xz + perp * position.x * 0.005 + bend * hgt * t * t;
+        float sw = max(0.005, dist * 0.0006) * (1.0 - t * 0.4);
+        pos.xz = xz + perp * position.x * sw + bend * hgt * t * t;
         pos.y = ground + (headY - ground) * t;
         vUv = vec2(0.02, 0.02);
       } else {
@@ -320,6 +324,7 @@ function makeFlowerMaterial(uniforms, flowerTex, q) {
     vertexEnd: '',
     fragmentColor: `
       if (vPart < 0.5) diffuseColor = vec4(vFlowCol, 1.0);
+      else diffuseColor.rgb *= 0.8;
     `,
     fragmentNormal: 'vec3 normal = normalize(vNormal);',
   });
