@@ -1,6 +1,6 @@
 // Main-thread view of the generated world: textures for the GPU, height/mask queries and collisions.
 import * as THREE from 'three';
-import { WORLD, sampleArr, chasmCentre, chasmHalfWidth } from './worldgen.js';
+import { WORLD, sampleArr, chasmCentre, CLIFF } from './worldgen.js';
 import { G } from './shaderlib.js';
 
 const CELL = 8;
@@ -22,6 +22,12 @@ export class World {
     mt.minFilter = THREE.LinearMipmapLinearFilter; mt.magFilter = THREE.LinearFilter; mt.generateMipmaps = true;
     mt.needsUpdate = true;
     this.heightTex = ht; this.normalTex = nt; this.maskTex = mt;
+    // cliff edge table: x = metres from CLIFF.x0, y = wall (0 south, 1 north); rgba = edge z, rim at edge, rim 4 m back, floor
+    const ct = new THREE.DataTexture(d.cliff, CLIFF.n, 2, THREE.RGBAFormat, THREE.FloatType);
+    ct.minFilter = ct.magFilter = THREE.NearestFilter;
+    ct.generateMipmaps = false;
+    ct.needsUpdate = true;
+    this.cliffTex = ct;
     G.uHeightTex.value = ht; G.uNormalTex.value = nt; G.uMaskTex.value = mt;
     G.uWorld.value.set(this.size, this.res, this.maskRes, 0);
 
@@ -58,11 +64,23 @@ export class World {
     return Math.max(this.grassAt(ox, oz), this.grassAt(ox + s, oz), this.grassAt(ox, oz + s), this.grassAt(ox + s, oz + s));
   }
 
-  inChasm(x, z, margin = 0) {
-    return Math.abs(z - chasmCentre(x)) < chasmHalfWidth(x) + margin;
+  // cliff table row for wall `wall` (0 south, 1 north) at x, linearly interpolated: [edgeZ, rimEdge, rimBack, floor]
+  cliffRow(x, wall, out = [0, 0, 0, 0]) {
+    const f = Math.min(Math.max(x - CLIFF.x0, 0), CLIFF.n - 1.001);
+    const i = Math.floor(f), t = f - i, c = this.cliff;
+    const a = (wall * CLIFF.n + i) * 4, b = a + 4;
+    for (let k = 0; k < 4; k++) out[k] = c[a + k] * (1 - t) + c[b + k] * t;
+    return out;
   }
+  // signed distance from the real rim edge (negative = over the drop)
   chasmEdgeDist(x, z) {
-    return Math.abs(z - chasmCentre(x)) - chasmHalfWidth(x);
+    const wall = z >= chasmCentre(x) ? 0 : 1;
+    const ze = this.cliffRow(x, wall, _row)[0];
+    return wall === 0 ? z - ze : ze - z;
+  }
+  // margin is relative to a line 3.6 m back from the edge: the player passes -3 and stops 0.6 m short of the drop
+  inChasm(x, z, margin = 0) {
+    return this.chasmEdgeDist(x, z) < margin + 3.6;
   }
 
   surfaceAt(x, z, y) {
@@ -127,3 +145,4 @@ export class World {
   }
 }
 const _v = new THREE.Vector3();
+const _row = [0, 0, 0, 0];

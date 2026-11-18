@@ -3,7 +3,9 @@ import * as THREE from 'three';
 import { mulberry32 } from './noise.js';
 import { patch } from './shaderlib.js';
 import { genTree, buildLeafGeometry, makeLeafMaterial, makeBarkMaterial } from './trees.js';
-import { ChunkedInstances, composeMatrices, makeInstanced, cascadePrefix, FADE_GLSL_VS, FADE_GLSL_FS, FADE_VS, FADE_FS, fadeUniforms } from './instancing.js';
+import { ChunkedInstances, composeMatrices, makeInstanced, cascadePrefix } from './instancing.js';
+import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
+import { ROCK_GLSL } from './cliffs.js';
 
 const SHRUBS = [
   { name: 'hazel', H: [1.4, 2.2], trunkFrac: 0.02, trunkR: 0.035, leader: 0.55, children: [7, 3], angle: [48, 40], lenRatio: [0.85, 0.6], radRatio: [0.7, 0.6],
@@ -104,27 +106,69 @@ function rockGeometry(seed, detail) {
   return g;
 }
 
-function makeRockMaterial(tex, fade) {
+// Angular limestone block: a boxy superellipsoid with chipped corners, a flat bedding-plane top and a
+// groove or two along the beds. LOD0 and LOD1 share the same shape function, so the switch does not pop.
+function blockGeometry(seed, segs) {
+  const rnd = mulberry32(seed * 7 + 3);
+  let g = new THREE.BoxGeometry(2, 2, 2, segs, segs, segs);
+  g.deleteAttribute('uv'); g.deleteAttribute('normal');
+  g = mergeVertices(g);
+  const n3 = noise3(seed + 900);
+  const P = 4.5 + rnd() * 2.5;
+  const chips = [];
+  // chips take off vertical corners (not the top edges), so blocks keep flat bedding-plane tops
+  const nc = 2 + Math.floor(rnd() * 2);
+  for (let i = 0; i < nc; i++) {
+    const d = new THREE.Vector3(rnd() * 2 - 1, (rnd() * 2 - 1) * 0.2, rnd() * 2 - 1).normalize();
+    chips.push({ d, o: 0.85 + rnd() * 0.2 });
+  }
+  const topCut = 0.45 + rnd() * 0.3;
+  const lay0 = rnd();
+  const p = g.attributes.position;
+  const ao = new Float32Array(p.count);
+  const v = new THREE.Vector3(), dir = new THREE.Vector3();
+  for (let i = 0; i < p.count; i++) {
+    dir.fromBufferAttribute(p, i).normalize();
+    const r = Math.pow(Math.abs(dir.x) ** P + Math.abs(dir.y) ** P + Math.abs(dir.z) ** P, -1 / P);
+    v.copy(dir).multiplyScalar(r);
+    const warp = n3(dir.x * 0.9, dir.y * 0.9, dir.z * 0.9, 2);
+    v.x *= 1 + warp * 0.14; v.z *= 1 - warp * 0.1;
+    for (const c of chips) { const t = v.dot(c.d) - c.o; if (t > 0) v.addScaledVector(c.d, -t); }
+    if (v.y > topCut) v.y = topCut + (v.y - topCut) * 0.06;
+    if (v.y < -0.7) v.y = -0.7;
+    const f = (v.y * 1.4 + lay0) % 1, gr = 1 - Math.min(1, Math.min(Math.abs(f), 1 - Math.abs(f)) / 0.1);
+    v.x *= 1 - 0.06 * gr; v.z *= 1 - 0.06 * gr;
+    v.addScaledVector(dir, n3(dir.x * 4, dir.y * 4, dir.z * 4, 3) * 0.035);
+    p.setXYZ(i, v.x, v.y, v.z);
+    ao[i] = Math.min(1, Math.max(0.4, 0.62 + (v.y + 0.8) * 0.18 - gr * 0.25 + warp * 0.5));
+  }
+  g.setAttribute('aAO', new THREE.BufferAttribute(ao, 1));
+  g.computeVertexNormals();
+  // vertices squashed onto a chip plane can end up with a zero normal
+  const nr = g.attributes.normal;
+  for (let i = 0; i < nr.count; i++) {
+    if (!(Math.hypot(nr.getX(i), nr.getY(i), nr.getZ(i)) > 0.5)) { dir.fromBufferAttribute(p, i).normalize(); nr.setXYZ(i, dir.x, dir.y, dir.z); }
+  }
+  return g;
+}
+
+function makeRockMaterial(tex) {
   const mat = new THREE.MeshLambertMaterial({ color: 0xffffff });
   patch(mat, {
     key: 'rock',
     wet: true,
-    uniforms: Object.assign({ uGround: { value: tex.ground } }, fadeUniforms(fade[0], fade[1])),
-    vertexPars: 'attribute float aAO; varying vec3 vObjN;' + FADE_GLSL_VS,
-    vertexMain: 'vec3 pos = position; vec3 nrm = normal; float ao = aAO; vObjN = normal;',
-    vertexEnd: FADE_VS,
-    fragmentPars: 'precision highp sampler2DArray; uniform sampler2DArray uGround; varying vec3 vObjN;' + FADE_GLSL_FS,
+    uniforms: { uGround: { value: tex.ground } },
+    vertexPars: 'attribute float aAO;',
+    vertexMain: 'vec3 pos = position; vec3 nrm = normal; float ao = aAO;',
+    fragmentPars: 'precision highp sampler2DArray; uniform sampler2DArray uGround;' + ROCK_GLSL,
     fragmentColor: /* glsl */`
-      ${FADE_FS}
       {
         vec3 wn = normalize((vec4(normalize(vNormal), 0.0) * viewMatrix).xyz);
-        vec3 w = pow(abs(wn), vec3(4.0)); w /= w.x + w.y + w.z;
-        vec3 p = vWPos * 0.32;
-        vec4 c = texture(uGround, vec3(p.zy, 1.0)) * w.x + texture(uGround, vec3(p.xz, 1.0)) * w.y + texture(uGround, vec3(p.xy, 1.0)) * w.z;
-        vec3 col = c.rgb * vec3(1.02, 1.0, 0.95);
+        float hgt;
+        vec3 col = limestone(vWPos, wn, hgt);
         vec4 m = groundMask(vWPos.xz);
         float moss = smoothstep(0.45, 0.85, wn.y + texture(uNoiseTex, vWPos.xz * 0.15).r * 0.35 - 0.15) * (0.25 + m.r * 0.75);
-        col = mix(col, vec3(0.09, 0.13, 0.035) * (0.8 + c.r * 0.5), moss * 0.85);
+        col = mix(col, vec3(0.09, 0.13, 0.035) * (0.8 + hgt * 0.4), moss * 0.85);
         float dirtBase = smoothstep(0.6, 0.0, vWPos.y - terrainHeight(vWPos.xz));
         col = mix(col, col * vec3(0.55, 0.5, 0.42), dirtBase * 0.7);
         gWet = uWetness * (1.0 - moss * 0.5);
@@ -188,15 +232,16 @@ export class Props {
       this.updaters.push(new ChunkedInstances({ matrices, pos, variant }, [q.fernDist], band, meshes));
     }
 
-    // ----- rocks -----
+    // ----- rocks: 0-3 rounded stones, 4-7 angular limestone blocks; one LOD at a time, no dithered crossfade -----
     {
       const R = world.rocks, n = R.length / 8;
       const l0 = q.rockLod0, lmax = 2600;
-      const f0 = [[-2, -1], [l0 - band, l0 + band]], f1 = [[l0 - band, l0 + band], [lmax - 40, lmax]];
-      const m0 = makeRockMaterial(tex, f0), m1 = makeRockMaterial(tex, f1);
+      const m0 = makeRockMaterial(tex), m1 = m0;
       const meshes = [];
-      for (let v = 0; v < 4; v++) {
-        const g0 = rockGeometry(40 + v * 13, q.rockDetail), g1 = rockGeometry(40 + v * 13, 1);
+      const segs0 = [4, 4, 4, 6, 8][Math.min(q.rockDetail, 4)];
+      for (let v = 0; v < 8; v++) {
+        const g0 = v < 4 ? rockGeometry(40 + v * 13, q.rockDetail) : blockGeometry(v, segs0);
+        const g1 = v < 4 ? rockGeometry(40 + v * 13, 2) : blockGeometry(v, 3);
         const a = makeInstanced(g0, m0, q.rockCap0), b = makeInstanced(g1, m1, q.rockCap1);
         a.castShadow = b.castShadow = q.shadows > 0;
         a.receiveShadow = b.receiveShadow = true;
@@ -211,7 +256,7 @@ export class Props {
         variant[i] = R[i * 8 + 7];
         if (s > 0.55) world.addCollider(R[i * 8], R[i * 8 + 2], Math.max(R[i * 8 + 4], R[i * 8 + 6]) * 0.85, R[i * 8 + 1] + R[i * 8 + 5] * 0.6);
       }
-      this.updaters.push(new ChunkedInstances({ matrices, pos, variant }, [l0, lmax], band, meshes));
+      this.updaters.push(new ChunkedInstances({ matrices, pos, variant }, [l0, lmax], band, meshes, 2048, { exclusive: true, endBand: 0 }));
     }
 
     // ----- logs -----

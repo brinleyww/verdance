@@ -1,6 +1,7 @@
 // Geometry-clipmap terrain: nested rings that follow the camera, snapped and geomorphed so nothing swims.
 import * as THREE from 'three';
 import { patch, G } from './shaderlib.js';
+import { ROCK_GLSL } from './cliffs.js';
 
 function ringGeometry(M, hole) {
   const pos = [];
@@ -150,6 +151,7 @@ function makeTerrainMaterial(uniforms, q) {
       }
       vec3 gN;
       float gTerrainAO = 1.0;
+      ${ROCK_GLSL}
     `,
     fragmentColor: /* glsl */`
       {
@@ -171,8 +173,6 @@ function makeTerrainMaterial(uniforms, q) {
         vec3 forest = lit.rgb * vec3(0.85, 0.8, 0.75);
         forest = mix(forest, forest * vec3(0.7, 0.9, 0.55), smoothstep(0.55, 0.8, nz2.g) * 0.6);
         vec4 dirt = layer2(3.0, p.xz, 0.38);
-        vec4 rock = tri(1.0, p, n, 0.11);
-        rock.rgb *= mix(vec3(0.9, 0.88, 0.82), vec3(1.05, 1.03, 0.98), nz.b);
         vec4 peb = layer2(2.0, p.xz, 0.55);
 
         float canopy = m.r, grass = m.g, path = m.b, wet = m.a;
@@ -193,7 +193,11 @@ function makeTerrainMaterial(uniforms, q) {
         float rockAmt = smoothstep(0.32, 0.55, slope + (nz2.b - 0.5) * 0.2);
         rockAmt = max(rockAmt, smoothstep(-20.0, -60.0, p.y));
         rockAmt = max(rockAmt, smoothstep(470.0, 560.0, p.y) * 0.85);
-        col = mix(col, rock.rgb, rockAmt); hgt = mix(hgt, rock.a, rockAmt);
+        if (rockAmt > 0.002) {
+          float rh;
+          vec3 rc = limestone(p, n, rh);
+          col = mix(col, rc, rockAmt); hgt = mix(hgt, rh, rockAmt);
+        }
         col = mix(col, vec3(0.10, 0.14, 0.04), rockAmt * canopy * smoothstep(0.6, 0.9, n.y) * 0.6);
 
         col *= 0.88 + 0.12 * nz.a + 0.12 * nz.r;
