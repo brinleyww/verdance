@@ -52,7 +52,7 @@ vec3 rockBedTint(float k) {
   vec3 c = mix(vec3(0.31, 0.29, 0.25), vec3(0.275, 0.27, 0.255), h2);
   c = mix(c, vec3(0.32, 0.255, 0.18), smoothstep(0.7, 0.95, hash12(vec2(floor(k / 4.0), 29.0))) * 0.6);
   c = mix(c, vec3(0.19, 0.185, 0.175), smoothstep(0.9, 0.995, h1) * 0.6);
-  return c * mix(0.93, 1.05, hu);
+  return c * mix(0.93, 1.05, hu) * 0.86;
 }
 // p world position, n world normal; returns albedo and a micro height for derivative bumps
 vec3 limestone(vec3 p, vec3 n, out float hgt) {
@@ -125,12 +125,14 @@ vec3 limestone(vec3 p, vec3 n, out float hgt) {
 // ---------------------------------------------------------------- the rim edge (GPU), also used by the terrain
 export const EDGE_GLSL = /* glsl */`
 uniform sampler2D uCliffTex;
+vec4 clTexel(int i, int wall) {
+  return texelFetch(uCliffTex, ivec2(i % ${CLIFF.tw}, i / ${CLIFF.tw} + wall * ${CLIFF.rows}), 0);
+}
 vec4 clRow(float x, float wall) {
   float f = clamp(x - (${CLIFF.x0.toFixed(1)}), 0.0, ${(CLIFF.n - 1.001).toFixed(3)});
   float i = floor(f);
-  vec4 a = texelFetch(uCliffTex, ivec2(int(i), int(wall)), 0);
-  vec4 b = texelFetch(uCliffTex, ivec2(int(i) + 1, int(wall)), 0);
-  return mix(a, b, f - i);
+  int ii = int(i), w = int(wall + 0.5);
+  return mix(clTexel(ii, w), clTexel(ii + 1, w), f - i);
 }
 // signed distance from the rim edge (negative = over the drop); only meaningful near the chasm
 float cliffEdgeDist(vec2 xz) {
@@ -240,14 +242,21 @@ const VS_MAIN = /* glsl */`
   float zy1 = clZ(cx, yRef + ce, cwall, crow), zy0 = clZ(cx, yRef - ce, cwall, crow);
   float Zx = (zx1 - zx0) / (2.0 * ce), Zy = (zy1 - zy0) / (2.0 * ce);
   vec3 faceN = normalize(cside * vec3(Zx, Zy, -1.0));
+  // the lip rows step back from the edge perpendicular to it: stepping straight along z folded the rows over
+  // each other wherever the edge bends
+  vec2 cen;
+  {
+    float dzdx = (clRow(cx + 1.5, cwall).x - clRow(cx - 1.5, cwall).x) / 3.0;
+    cen = normalize(vec2(-dzdx, 1.0)) * cside;
+  }
   if (cs < -2.5) {          // lip, buried under the grass 4.5 m back
-    pos = vec3(cx, crow.z - 0.6, crow.x + cside * 4.5);
+    pos = vec3(cx + cen.x * 4.5, crow.z - 0.6, crow.x + cen.y * 4.5);
     nrm = up; clip = 0.0;
   } else if (cs < -1.5) {   // lip, just breaking the turf
-    pos = vec3(cx, mix(crow.y, crow.z, 0.42) + 0.06 + ccrag * 0.12, crow.x + cside * 2.2);
+    pos = vec3(cx + cen.x * 2.2, mix(crow.y, crow.z, 0.42) + 0.06 + ccrag * 0.12, crow.x + cen.y * 2.2);
     nrm = up; clip = 0.35;
   } else if (cs < -0.5) {   // lip, over the edge of the plateau
-    pos = vec3(cx, crow.y + 0.05 + ccrag * 0.25, crow.x + cside * 0.5);
+    pos = vec3(cx + cen.x * 0.5, crow.y + 0.05 + ccrag * 0.25, crow.x + cen.y * 0.5);
     nrm = normalize(up + faceN * 0.35); clip = 0.7;
   } else {                  // the face
     cdep = cH * clDep01(cs);
@@ -442,7 +451,9 @@ export class Cliffs {
   }
 
   // blocks resting on ledges in the visible upper wall, appended to the world's rocks before Props reads them
-  addLedgeRocks(count = 300) {
+  // off by default: the wall's own ledges and beds carry the detail, loose blocks perched on them looked stuck on
+  addLedgeRocks(count = 0) {
+    if (count <= 0) { this.ledgeRocks = 0; return; }
     const rnd = mulberry32(4242);
     const W = this.world;
     const add = [];

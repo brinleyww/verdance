@@ -152,6 +152,9 @@ const DIR_BLOCK = /* glsl */`
 	#ifdef VERD
 	sunShadow *= cloudShadowAt( vWPos );
 	#endif
+	#ifdef EXTRA_SHADOW
+	sunShadow *= gExtraShadow;
+	#endif
 	#ifdef FOLIAGE_TRANS
 	gSunUnsh = directLight.color; gSunSh = sunShadow;
 	#endif

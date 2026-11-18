@@ -1,7 +1,44 @@
 // Geometry-clipmap terrain: nested rings that follow the camera, snapped and geomorphed so nothing swims.
 import * as THREE from 'three';
 import { patch, G } from './shaderlib.js';
-import { ROCK_GLSL } from './cliffs.js';
+import { ROCK_GLSL, BED_GLSL, EDGE_GLSL } from './cliffs.js';
+
+// Steep ground is rock: the surface is pushed out and back by limestone beds (ledges, overhung lips, recessed
+// soft bands), big crags and gullies. Evaluated from world position, so clipmap levels always agree.
+const CRAG_GLSL = /* glsl */`
+float cragMask(float ny, vec2 xz) {
+  float m = smoothstep(0.34, 0.6, 1.0 - ny);
+  // the chasm has its own cliff mesh
+  float zc = -650.0 + 36.0 * sin(xz.x / 290.0) + 18.0 * sin(xz.x / 113.0 + 1.3);
+  float hw = 118.0 + 16.0 * sin(xz.x / 210.0 + 0.7);
+  return m * smoothstep(hw + 25.0, hw + 60.0, abs(xz.y - zc));
+}
+// outward relief (m); beds and crags weighted separately so distant LODs keep only what they can carry.
+// hd = horizontal direction the face looks toward.
+// joints and gullies along one fixed horizontal axis; callers blend the x and z versions by facing, which keeps the
+// pattern a function of position only (a coordinate built from the per-pixel normal would swirl)
+float cragJoint(float along, float bb, float y) {
+  float jb = floor(bb / 2.0);
+  float hr = hash12(vec2(jb, 5.0));
+  // only some bed pairs are jointed into blocks, at their own spacing
+  float jc = floor(along / (6.0 + 9.0 * hash12(vec2(jb, 9.0))) + hr);
+  float blk = (hash12(vec2(jc, jb + 31.0)) - 0.5) * 1.6 * step(0.45, hr);
+  float gully = abs(textureLod(uNoiseTex, vec2(along * 0.0028 + 0.2, y * 0.0005 + 0.53), 0.0).b - 0.5);
+  return blk - (1.0 - smoothstep(0.0, 0.16, gully)) * 3.0;
+}
+float cragD(vec3 p, vec2 hd, float wBeds, float wCrag, out float groove) {
+  float bb = rockBedCoord(p);
+  float st = rockStrata(bb, groove);
+  float wz = smoothstep(0.35, 0.65, abs(hd.x));   // facing +-x: the face runs along z
+  float jt = mix(cragJoint(p.x, bb, p.y), cragJoint(p.z + 517.0, bb, p.y), wz);
+  vec4 a = textureLod(uNoiseTex, vec2(p.x * 0.0061 + p.z * 0.0043, p.y * 0.0071 + 0.31), 0.0);
+  vec4 b = textureLod(uNoiseTex, vec2((p.x + p.z) * 0.017, p.y * 0.023 + 0.77), 0.0);
+  // some beds stand out strongly, others barely show
+  float bedAmp = 0.35 + 0.9 * textureLod(uNoiseTex, vec2((p.x - p.z) * 0.0037 + 0.61, bb * 0.11), 0.0).r;
+  float crag = (a.r - 0.5) * 8.0 + (b.g - 0.5) * 2.6;
+  return ((st - 2.0) * 0.45 * bedAmp + jt) * wBeds + crag * wCrag;
+}
+`;
 
 function ringGeometry(M, hole) {
   const pos = [];
@@ -41,6 +78,7 @@ export class Terrain {
       uGround: { value: tex.ground },
       uGrassRadius: { value: q.grassRadius },
       uDetail: { value: q.terrainDetail },
+      uCliffTex: { value: world.cliffTex },
     };
     this.shared = shared;
     for (let L = 0; L < this.levels; L++) {
@@ -78,7 +116,7 @@ function makeTerrainMaterial(uniforms, q) {
     key: 'terrain',
     uniforms,
     wet: true,
-    defines: q.terrainDetail > 1 ? { TERRAIN_HQ: '' } : {},
+    defines: Object.assign({ EXTRA_SHADOW: '' }, q.terrainDetail > 1 ? { TERRAIN_HQ: '' } : {}),
     vertexPars: /* glsl */`
       uniform sampler2D uFarTex;
       uniform vec2 uLevelOrigin;
@@ -86,6 +124,10 @@ function makeTerrainMaterial(uniforms, q) {
       uniform float uLevelHalf;
       varying vec3 vTN;
       varying float vNear;
+      varying float vCrag;
+      ${BED_GLSL}
+      ${CRAG_GLSL}
+      ${EDGE_GLSL}
       float farHeight(vec2 xz) {
         float size = 16384.0, res = 512.0;
         vec2 f = (xz + size * 0.5) / (size / res) - 0.5;
@@ -114,6 +156,16 @@ function makeTerrainMaterial(uniforms, q) {
       float morph = smoothstep(0.74, 0.94, max(dc.x, dc.y));
       wxz -= mod(g, 2.0) * uLevelScale * morph;
       float hh = worldHeight(wxz);
+      // at the chasm rim the 1 m grid cannot follow the wiggly edge: plateau triangles would poke out past it as
+      // teeth through the rock lip. Under the lip the mesh sits a little lower, and anything past the edge drops
+      // behind the cliff face.
+      {
+        float zc = -650.0 + 36.0 * sin(wxz.x / 290.0) + 18.0 * sin(wxz.x / 113.0 + 1.3);
+        if (abs(wxz.y - zc) < 220.0) {
+          float ed = cliffEdgeDist(wxz);
+          if (ed < 6.0) hh -= 0.45 * (1.0 - smoothstep(3.0, 6.0, ed)) + max(-ed, 0.0) * 6.0;
+        }
+      }
       vec3 pos = vec3(wxz.x, hh, wxz.y);
       float e = max(uLevelScale, 8.0);
       vec3 nrm;
@@ -125,6 +177,16 @@ function makeTerrainMaterial(uniforms, q) {
         nrm = normalize(vec3(-hx, 2.0 * e, -hz));
       }
       vTN = nrm;
+      // rock faces: push the surface out along the slope's horizontal direction
+      vCrag = cragMask(nrm.y, wxz);
+      if (vCrag > 0.001) {
+        float dc = length(pos - uCamPos);
+        // bed and block steps stay mostly in the shading: the mesh only carries them close up, where vertices are dense
+        float wB = 0.35 * (1.0 - smoothstep(30.0, 70.0, dc)), wC = 1.0 - smoothstep(500.0, 1100.0, dc);
+        float gv;
+        vec2 hd = normalize(nrm.xz + vec2(1e-5, 0.0));
+        pos.xz += hd * cragD(pos, hd, wB, wC, gv) * vCrag;
+      }
       float ao = 1.0;
     `,
     fragmentPars: /* glsl */`
@@ -133,6 +195,7 @@ function makeTerrainMaterial(uniforms, q) {
       uniform float uGrassRadius;
       varying vec3 vTN;
       varying float vNear;
+      varying float vCrag;
       vec4 tri(float layer, vec3 p, vec3 n, float scale) {
         vec3 w = pow(abs(n), vec3(4.0));
         w /= (w.x + w.y + w.z);
@@ -151,7 +214,10 @@ function makeTerrainMaterial(uniforms, q) {
       }
       vec3 gN;
       float gTerrainAO = 1.0;
+      float gExtraShadow = 1.0;
+      float gCragAO = 1.0;
       ${ROCK_GLSL}
+      ${CRAG_GLSL}
     `,
     fragmentColor: /* glsl */`
       {
@@ -195,8 +261,41 @@ function makeTerrainMaterial(uniforms, q) {
         rockAmt = max(rockAmt, smoothstep(-20.0, -60.0, p.y));
         rockAmt = max(rockAmt, smoothstep(470.0, 560.0, p.y) * 0.85);
         if (rockAmt > 0.002) {
+          // the relief's own normal: slopes of the displacement up the face and across it, sampled over at
+          // least a pixel footprint so beds stay crisp up close and soft far away
+          float cm = clamp(vCrag, 0.0, 1.0) * rockAmt;
+          float groove = 0.0, cragHere = 0.0;
+          if (cm > 0.002) {
+            vec2 hd = normalize(n.xz + vec2(1e-5, 0.0));
+            vec3 tdir = vec3(-hd.y, 0.0, hd.x);
+            float eps = max(0.25, length(fwidth(p)) * 1.5);
+            float g0;
+            cragHere = cragD(p, hd, 1.0, 1.0, groove);
+            float dDy = (cragD(p + vec3(0.0, eps, 0.0), hd, 1.0, 1.0, g0) - cragD(p - vec3(0.0, eps, 0.0), hd, 1.0, 1.0, g0)) / (2.0 * eps);
+            float dDt = (cragD(p + tdir * eps, hd, 1.0, 1.0, g0) - cragD(p - tdir * eps, hd, 1.0, 1.0, g0)) / (2.0 * eps);
+            vec3 pn = n - (vec3(0.0, 1.0, 0.0) * clamp(dDy, -5.0, 5.0) + tdir * clamp(dDt, -5.0, 5.0)) * cm;
+            float pl = length(pn);
+            if (pl > 1e-4) n = pn / pl;
+            // ledges and crags shadow the rock below them: step toward the sun and see whether the relief there
+            // stands out further than the ray has left the face
+            float ldh = dot(uSunDir.xz, hd);
+            float occ = 0.0;
+            for (int i = 1; i <= 3; i++) {
+              float t = float(i * i) * 0.9;
+              occ = max(occ, cragD(p + uSunDir * t, hd, 1.0, 1.0, g0) - cragHere - ldh * t);
+            }
+            gExtraShadow = 1.0 - smoothstep(0.0, 0.9, occ) * cm;
+            // recesses, gullies and the undersides of ledges see less sky
+            gCragAO = mix(1.0, (0.5 + 0.5 * smoothstep(-6.0, 3.0, cragHere)) * (1.0 - groove * 0.3) * (0.75 + 0.25 * max(n.y, 0.0)), cm);
+          }
           float rh;
           vec3 rc = limestone(p, n, rh);
+          // crevices and recessed bands hold shadow, bed tops catch moss and grass
+          rc *= mix(1.0, 0.78 * (1.0 - groove * 0.25) * mix(0.5, 1.0, smoothstep(-6.0, 3.0, cragHere)), cm);
+          // weathered grey patina over most of the face; fresh pale rock only in patches
+          rc = mix(rc, rc * vec3(0.72, 0.74, 0.78), smoothstep(0.35, 0.65, texture(uNoiseTex, p.xz * 0.011 + p.y * 0.007).r) * cm * 0.7);
+          float ledge = smoothstep(0.55, 0.85, n.y) * cm * smoothstep(0.35, 0.65, texture(uNoiseTex, p.xz * 0.05 + p.y * 0.02).g);
+          rc = mix(rc, mix(vec3(0.07, 0.1, 0.03), vec3(0.13, 0.15, 0.05), nz2.r), ledge * 0.85);
           col = mix(col, rc, rockAmt); hgt = mix(hgt, rh, rockAmt);
         }
         col = mix(col, vec3(0.10, 0.14, 0.04), rockAmt * canopy * smoothstep(0.6, 0.9, n.y) * 0.6);
@@ -204,7 +303,7 @@ function makeTerrainMaterial(uniforms, q) {
         col *= 0.88 + 0.12 * nz.a + 0.12 * nz.r;
         gWet = uWetness * (0.55 + 0.45 * (1.0 - grass)) + bank * 0.6;
         col *= 1.0 - gWet * 0.38;
-        gTerrainAO = (1.0 - canopy * 0.3) * mix(1.0, 0.8, grass * (1.0 - farMix));
+        gTerrainAO = (1.0 - canopy * 0.3) * mix(1.0, 0.8, grass * (1.0 - farMix)) * gCragAO;
         gSpec = 1.0 - grass * 0.8;
         diffuseColor.rgb = col;
         gN = n;

@@ -213,7 +213,8 @@ function makeGrassMaterial(uniforms, q) {
       float rnk = aBlade.z, r = aBlade.w;
       float dist = length(xz - cameraPosition.xz);
       vec4 gm = groundMask(xz);
-      float amount = gm.g;
+      // no grass on rock faces (their surface is displaced away from the heightmap)
+      float amount = gm.g * (1.0 - smoothstep(0.26, 0.38, 1.0 - terrainNormal(xz).y));
       vec4 nz = texture(uNoiseTex, xz * 0.013);
       float D = densityAt(dist) * smoothstep(0.06, 0.45, amount);
       float vis = clamp((D - rnk) / 0.035, 0.0, 1.0);
@@ -278,7 +279,7 @@ function makeFlowerMaterial(uniforms, flowerTex, q) {
       float dist = length(xz - cameraPosition.xz);
       vec4 gm = groundMask(xz);
       vec4 nz = texture(uNoiseTex, xz * 0.006 + 0.3);
-      float patchF = smoothstep(0.45, 0.7, nz.g) * gm.g * (1.0 - gm.r);
+      float patchF = smoothstep(0.45, 0.7, nz.g) * gm.g * (1.0 - gm.r) * (1.0 - smoothstep(0.26, 0.38, 1.0 - terrainNormal(xz).y));
       // presence depends only on the patch, never on distance, so flowers never grow in as you walk up;
       // they only shrink in the last few metres of their range where they are a pixel or two wide
       float vis = clamp((patchF - rnk) / 0.04, 0.0, 1.0);

@@ -364,7 +364,8 @@ async function boot() {
     // eye adaptation without GPU readback: canopy density + weather drive exposure
     {
       const p = camera.position;
-      const canopy = world.forestAt(p.x, p.z);
+      // the forest only darkens the view when the camera is actually under the canopy, not above it
+      const canopy = world.forestAt(p.x, p.z) * (1 - THREE.MathUtils.smoothstep(p.y - world.heightAt(p.x, p.z), 9, 22));
       const target = (1 + canopy * 1.25) * (1 + env.s.overcast * 0.25) * (1 + (1 - env.daylight) * 1.4);
       exposure += (target - exposure) * Math.min(1, dt * 0.8);
       post.grade.uniforms.uExposure.value = exposure;

@@ -51,7 +51,9 @@ export function chasmHalfWidth(x) { return 118 + 16 * Math.sin(x / 210 + 0.7); }
 
 // Cliff edge table: per metre of x and per wall, the rim edge z, rim heights and floor (see cliffs.js).
 // The terrain wall behind the cliff mesh is a straight batter of CLIFF.slope metres down per metre in.
-export const CLIFF = { x0: -2048, n: 4096, slope: 14.3 };
+// The table covers the chasm far out into the distant terrain (+-6 km); it is stored in rows of CLIFF.tw texels so
+// the texture stays within every GPU's size limit (CLIFF.rows rows per wall).
+export const CLIFF = { x0: -6144, n: 12288, slope: 14.3, tw: 2048, rows: 6 };
 // Decorative springs that pour over the north wall: [x, width]
 export const NORTH_FALLS = [[-430, 9], [-120, 5], [330, 12], [610, 7]];
 
@@ -124,7 +126,8 @@ export function generateWorld(seed = 1337, progress = () => {}) {
 
   // rim edge distance from the centre line; side +1 = south wall, -1 = north wall
   function edgeW(x, side) {
-    let w = chasmHalfWidth(x) + 5.5 * S2.fbm(x / 38, side * 3.7 + 50, 3) + 1.5 * S.noise2(x / 11, side * 9.1 + 2.0);
+    // irregular at the scale of tens of metres; finer zigzags only fold the thin rock lip that follows this line
+    let w = chasmHalfWidth(x) + 5.5 * S2.fbm(x / 42, side * 3.7 + 50, 2) + 0.5 * S.noise2(x / 17, side * 9.1 + 2.0);
     if (side > 0) w -= 9 * Math.exp(-(((x + 10) / 24) ** 2)); // rocky promontory at the end of the rim trail
     return w;
   }
@@ -554,45 +557,17 @@ export function generateWorld(seed = 1337, progress = () => {}) {
   };
   // variants 0-3 are water-worn and rounded, 4-7 are angular limestone blocks
   const block = () => 4 + Math.floor(rnd() * 4);
-  // outcrops on steep ground and the ridge: mostly jointed limestone
+  // a few loose stones on gentle ground only: steep ground is rock in its own right (terrain crags), so nothing
+  // is scattered on slopes, ridges or the chasm rim
   for (let gz = -half; gz < half; gz += 9) {
     for (let gx = -half; gx < half; gx += 9) {
       const x = gx + rnd() * 9, z = gz + rnd() * 9;
       const sl = slopeAt(x, z);
-      if (edgeDist(x, z) < 10) continue;
-      const ridge = Math.exp(-((x - 440) ** 2 + (z + 228) ** 2) / (2 * 90 * 90));
-      const p = smoothstep(0.38, 0.9, sl) * 0.75 + ridge * 0.22 + 0.006;
-      if (rnd() > p) continue;
-      if (blocked(x, z, 1.2) && rnd() < 0.9) continue;
-      const big = sl > 0.5 || ridge > 0.3;
-      const ang = big || rnd() < 0.6;
-      addRock(x, z, big ? 2.2 + rnd() * 4.5 : 0.5 + rnd() * 1.2, ang ? 0.45 + rnd() * 0.3 : 0.55 + rnd() * 0.4, big ? 0.38 : 0.35, ang ? block() : -1);
-    }
-  }
-  // broken blocks along the cliff edge: clusters of strata-aligned slabs, half sunk into the rock lip
-  let creekLipX = 0;
-  for (let i = creek.length - 1; i >= 0; i--) {
-    if (creek[i].z > chasmCentre(creek[i].x) + edgeAt(creek[i].x, 1) + 1.5) { creekLipX = creek[i].x; break; }
-  }
-  const fallX = NORTH_FALLS.map(([x, w]) => ({ x, w, side: -1 })).concat([{ x: creekLipX, w: 6, side: 1 }]);
-  const nearPylon = (x, z) => PYLONS.some((p) => Math.hypot(x - p.x, z - p.z) < 30);
-  for (let cx = -1012; cx < 1012; cx += 11) {
-    for (const side of [1, -1]) {
-      if (rnd() > 0.55) continue;
-      const x0 = cx + rnd() * 11;
-      if (fallX.some((f) => f.side === side && Math.abs(f.x - x0) < f.w + 8)) continue;
-      const pieces = 1 + Math.floor(rnd() * 3.2);
-      const main = 1.3 + rnd() * 2.4;
-      for (let k = 0; k < pieces; k++) {
-        const x = x0 + (k ? (rnd() - 0.5) * main * 3 : 0);
-        const back = k ? 0.5 + rnd() * main * 1.6 : Math.pow(rnd(), 1.7) * 6;
-        const z = chasmCentre(x) + side * (edgeAt(x, side) + 0.4 + back);
-        if (Math.abs(z) > half || nearPylon(x, z)) continue;
-        const ci = clamp(Math.floor((x + size / 2) / cell), 0, N - 1), cj = clamp(Math.floor((z + size / 2) / cell), 0, N - 1);
-        if (creekDist[cj * N + ci] < (creekW[cj * N + ci] || 2) + 3 || trailDist[cj * N + ci] < 2.2) continue;
-        const s = k ? main * (0.3 + rnd() * 0.35) : main;
-        addRock(x, z, s, 0.45 + rnd() * 0.35, 0.3, block());
-      }
+      if (sl > 0.32 || edgeDist(x, z) < 25) continue;
+      if (rnd() > 0.006 + smoothstep(0.15, 0.32, sl) * 0.02) continue;
+      if (blocked(x, z, 1.2)) continue;
+      const ang = rnd() < 0.5;
+      addRock(x, z, 0.45 + rnd() * 0.9, ang ? 0.5 + rnd() * 0.3 : 0.55 + rnd() * 0.4, 0.45, ang ? block() : -1);
     }
   }
   // stones along the creek

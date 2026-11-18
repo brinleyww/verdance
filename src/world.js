@@ -23,7 +23,8 @@ export class World {
     mt.needsUpdate = true;
     this.heightTex = ht; this.normalTex = nt; this.maskTex = mt;
     // cliff edge table: x = metres from CLIFF.x0, y = wall (0 south, 1 north); rgba = edge z, rim at edge, rim 4 m back, floor
-    const ct = new THREE.DataTexture(d.cliff, CLIFF.n, 2, THREE.RGBAFormat, THREE.FloatType);
+    // same memory layout as one long row per wall, wrapped into rows of CLIFF.tw texels
+    const ct = new THREE.DataTexture(d.cliff, CLIFF.tw, CLIFF.rows * 2, THREE.RGBAFormat, THREE.FloatType);
     ct.minFilter = ct.magFilter = THREE.NearestFilter;
     ct.generateMipmaps = false;
     ct.needsUpdate = true;
