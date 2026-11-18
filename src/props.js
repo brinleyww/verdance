@@ -119,7 +119,7 @@ function blockGeometry(seed, segs) {
   g.deleteAttribute('uv'); g.deleteAttribute('normal');
   g = mergeVertices(g);
   const n3 = noise3(seed + 900);
-  const P = 4.5 + rnd() * 2.5;
+  const P = 7 + rnd() * 3;
   const chips = [];
   // chips take off vertical corners (not the top edges), so blocks keep flat bedding-plane tops
   const nc = 2 + Math.floor(rnd() * 2);
@@ -137,7 +137,7 @@ function blockGeometry(seed, segs) {
     const r = Math.pow(Math.abs(dir.x) ** P + Math.abs(dir.y) ** P + Math.abs(dir.z) ** P, -1 / P);
     v.copy(dir).multiplyScalar(r);
     const warp = n3(dir.x * 0.9, dir.y * 0.9, dir.z * 0.9, 2);
-    v.x *= 1 + warp * 0.14; v.z *= 1 - warp * 0.1;
+    v.x *= 1 + warp * 0.06; v.z *= 1 - warp * 0.045;
     for (const c of chips) { const t = v.dot(c.d) - c.o; if (t > 0) v.addScaledVector(c.d, -t); }
     if (v.y > topCut) v.y = topCut + (v.y - topCut) * 0.06;
     if (v.y < -0.7) v.y = -0.7;
@@ -165,7 +165,7 @@ function makeRockMaterial(tex) {
     uniforms: { uGround: { value: tex.ground } },
     vertexPars: 'attribute float aAO;',
     vertexMain: 'vec3 pos = position; vec3 nrm = normal; float ao = aAO;',
-    fragmentPars: 'precision highp sampler2DArray; uniform sampler2DArray uGround;' + ROCK_GLSL,
+    fragmentPars: 'precision highp sampler2DArray; uniform sampler2DArray uGround; vec3 gRockN = vec3(0.0, 0.0, 1.0);' + ROCK_GLSL,
     fragmentColor: /* glsl */`
       {
         vec3 wn = normalize((vec4(normalize(vNormal), 0.0) * viewMatrix).xyz);
@@ -179,8 +179,26 @@ function makeRockMaterial(tex) {
         gWet = uWetness * (1.0 - moss * 0.5);
         col *= 1.0 - gWet * 0.35;
         diffuseColor.rgb = col;
+        // surface relief from the limestone micro height (cracks, pits, bedding), faded with distance
+        gRockN = normalize(vNormal);
+        float dist = length(vWPos - cameraPosition);
+        float bumpS = 0.12 * (1.0 - smoothstep(15.0, 60.0, dist)) * (1.0 - moss * 0.7);
+        if (bumpS > 0.0) {
+          vec3 p = vWPos;
+          vec3 n = wn;
+          float Hh = hgt * bumpS;
+          vec3 dpx = dFdx(p), dpy = dFdy(p);
+          float hx = dFdx(Hh), hy = dFdy(Hh);
+          vec3 r1 = cross(dpy, n), r2 = cross(n, dpx);
+          float det = dot(dpx, r1);
+          vec3 grad = sign(det) * (hx * r1 + hy * r2);
+          vec3 bn = abs(det) * n - grad;
+          float bl = length(bn);
+          if (bl > 1e-4) gRockN = normalize((viewMatrix * vec4(bn / bl, 0.0)).xyz);
+        }
       }
     `,
+    fragmentNormal: 'vec3 normal = gRockN * faceDirection;',
   });
   return mat;
 }
@@ -247,7 +265,7 @@ export class Props {
       const l0 = q.rockLod0, lmax = 2600;
       const m0 = makeRockMaterial(tex), m1 = m0;
       const meshes = [];
-      const segs0 = [4, 4, 4, 6, 8][Math.min(q.rockDetail, 4)];
+      const segs0 = [4, 4, 6, 8, 10][Math.min(q.rockDetail, 4)];
       for (let v = 0; v < 8; v++) {
         const g0 = v < 4 ? rockGeometry(40 + v * 13, q.rockDetail) : blockGeometry(v, segs0);
         const g1 = v < 4 ? rockGeometry(40 + v * 13, 2) : blockGeometry(v, 3);

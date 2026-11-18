@@ -82,7 +82,42 @@ vec3 limestone(vec3 p, vec3 n, out float hgt) {
   col = mix(col, col * vec3(1.1, 0.84, 0.62), smoothstep(0.66, 0.88, st2) * smoothstep(0.55, 0.85, 1.0 - st) * 0.5);
   float li = texture(uNoiseTex, vec2(hz * 0.13, p.y * 0.17)).b;
   col = mix(col, vec3(0.42, 0.43, 0.36), smoothstep(0.72, 0.86, li) * 0.3);
-  hgt = t.a * 0.1 + t2.a * 0.5 - plane * 0.6 + lam * 0.2;
+  // relief is derived per pixel, so it only takes smooth inputs (pixel-scale texture detail would turn into noise)
+  hgt = t2.a * 0.5 - plane * 0.6 + lam * 0.2;
+  // close up: grain at 1 m and 30 cm and angular joint cracks, each faded by the pixel footprint so nothing aliases
+  float dcam = length(p - cameraPosition);
+  if (dcam < 70.0) {
+    float nearF = 1.0 - smoothstep(35.0, 70.0, dcam);
+    float fp = length(fwidth(p));          // metres covered by one pixel
+    float f3 = 1.0 - smoothstep(0.1, 0.3, fp), f4 = 1.0 - smoothstep(0.025, 0.07, fp);
+    vec4 t3 = texture(uGround, vec3(p.zy * 0.93 + 0.7, 1.0)) * w.x + texture(uGround, vec3(p.xz * 0.93 + 0.7, 1.0)) * w.y + texture(uGround, vec3(p.xy * 0.93 + 0.7, 1.0)) * w.z;
+    vec4 t4 = texture(uGround, vec3(p.zy * 3.1 + 0.2, 1.0)) * w.x + texture(uGround, vec3(p.xz * 3.1 + 0.2, 1.0)) * w.y + texture(uGround, vec3(p.xy * 3.1 + 0.2, 1.0)) * w.z;
+    // joints: edges of a warped cellular pattern on the dominant face, so they run straight and meet at angles
+    vec2 q = w.y > max(w.x, w.z) ? p.xz : (w.x > w.z ? p.zy : p.xy);
+    q += (texture(uNoiseTex, q * 0.023).rg - 0.5) * 2.2;
+    vec2 cx = q / 1.9, ci = floor(cx), cf = cx - ci;
+    float d1 = 8.0, d2 = 8.0;
+    vec2 g1 = vec2(0.0), g2 = vec2(0.0);
+    for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++) {
+      vec2 g = vec2(float(i), float(j));
+      vec2 r = g + hash22(ci + g) * 0.85 + 0.075 - cf;
+      float d = dot(r, r);
+      if (d < d1) { d2 = d1; g2 = g1; d1 = d; g1 = g; } else if (d < d2) { d2 = d; g2 = g; }
+    }
+    float edge = sqrt(d2) - sqrt(d1);
+    float fe = fwidth(edge);
+    // only some cell borders are open joints, so cracks run as sparse lines instead of a paving pattern
+    float open = step(0.62, hash12(ci * 2.0 + g1 + g2 + 17.0));
+    float ck = open * (1.0 - smoothstep(0.012, 0.012 + fe * 1.5, edge)) * (1.0 - smoothstep(0.1, 0.3, fe));
+    float g3 = dot(t3.rgb, vec3(0.333)) / 0.33, g4 = dot(t4.rgb, vec3(0.333)) / 0.33;
+    // weathering: pale lichen rosettes and darker water-worn patches at the scale of a hand to a stride
+    float lich = smoothstep(0.64, 0.8, texture(uNoiseTex, q * 0.41 + 0.2).r) * f3;
+    float dark = smoothstep(0.58, 0.82, texture(uNoiseTex, q * 0.13 + 0.6).g);
+    vec3 det = vec3(mix(1.0, g3, 0.22 * f3) * mix(1.0, g4, 0.1 * f4) * (1.0 - ck * 0.35) * (1.0 - dark * 0.18));
+    col = mix(col, mix(col * det, vec3(0.5, 0.51, 0.44), lich * 0.3), nearF);
+    float t3h = (texture(uGround, vec3(p.zy * 0.93 + 0.7, 1.0), 3.0) * w.x + texture(uGround, vec3(p.xz * 0.93 + 0.7, 1.0), 3.0) * w.y + texture(uGround, vec3(p.xy * 0.93 + 0.7, 1.0), 3.0) * w.z).a;
+    hgt += (t3h - 0.5) * 0.35 * f3 * nearF;
+  }
   return col;
 }
 `;

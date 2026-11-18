@@ -4,13 +4,13 @@ import { G, COMMON_GLSL } from './shaderlib.js';
 import { skyRadianceJS } from './sky.js';
 
 export const WEATHERS = {
-  clear: { label: 'Clear', cover: 0.36, overcast: 0.0, stratus: 0, fog: 0.00016, mist: 0.022, wind: 0.3, rain: 0, cd: 1.0, dark: 0.0, sun: 1.0, storm: 0, haze: 1.0 },
-  fair: { label: 'Fair', cover: 0.52, overcast: 0.03, stratus: 0, fog: 0.0002, mist: 0.026, wind: 0.42, rain: 0, cd: 1.0, dark: 0.03, sun: 1.0, storm: 0, haze: 0.95 },
-  cloudy: { label: 'Cloudy', cover: 0.7, overcast: 0.28, stratus: 0.12, fog: 0.0003, mist: 0.032, wind: 0.58, rain: 0, cd: 1.15, dark: 0.2, sun: 0.88, storm: 0, haze: 0.75 },
-  overcast: { label: 'Overcast', cover: 0.9, overcast: 0.84, stratus: 0.85, fog: 0.0007, mist: 0.045, wind: 0.5, rain: 0, cd: 1.3, dark: 0.5, sun: 0.3, storm: 0, haze: 0.45 },
+  clear: { label: 'Clear', cover: 0.36, overcast: 0.0, stratus: 0, fog: 0.00016, mist: 0.013, wind: 0.3, rain: 0, cd: 1.0, dark: 0.0, sun: 1.0, storm: 0, haze: 1.0 },
+  fair: { label: 'Fair', cover: 0.52, overcast: 0.03, stratus: 0, fog: 0.0002, mist: 0.015, wind: 0.42, rain: 0, cd: 1.0, dark: 0.03, sun: 1.0, storm: 0, haze: 0.95 },
+  cloudy: { label: 'Cloudy', cover: 0.7, overcast: 0.28, stratus: 0.12, fog: 0.0003, mist: 0.019, wind: 0.58, rain: 0, cd: 1.15, dark: 0.2, sun: 0.88, storm: 0, haze: 0.75 },
+  overcast: { label: 'Overcast', cover: 0.9, overcast: 0.84, stratus: 0.85, fog: 0.0007, mist: 0.028, wind: 0.5, rain: 0, cd: 1.3, dark: 0.5, sun: 0.3, storm: 0, haze: 0.45 },
   fog: { label: 'Fog', cover: 0.85, overcast: 0.88, stratus: 0.6, fog: 0.0062, mist: 0.09, wind: 0.1, rain: 0, cd: 1.2, dark: 0.45, sun: 0.32, storm: 0, haze: 2.2 },
-  rain: { label: 'Rain', cover: 0.96, overcast: 0.95, stratus: 1.0, fog: 0.0017, mist: 0.06, wind: 0.75, rain: 0.8, cd: 1.45, dark: 0.72, sun: 0.15, storm: 0, haze: 0.6 },
-  storm: { label: 'Storm', cover: 1.0, overcast: 1.0, stratus: 1.0, fog: 0.0023, mist: 0.07, wind: 1.0, rain: 1.0, cd: 1.65, dark: 0.9, sun: 0.07, storm: 1, haze: 0.5 },
+  rain: { label: 'Rain', cover: 0.96, overcast: 0.95, stratus: 1.0, fog: 0.0017, mist: 0.04, wind: 0.75, rain: 0.8, cd: 1.45, dark: 0.72, sun: 0.15, storm: 0, haze: 0.6 },
+  storm: { label: 'Storm', cover: 1.0, overcast: 1.0, stratus: 1.0, fog: 0.0023, mist: 0.047, wind: 1.0, rain: 1.0, cd: 1.65, dark: 0.9, sun: 0.07, storm: 1, haze: 0.5 },
 };
 // Markov chain: every state can reach rain within two steps
 const NEXT = {

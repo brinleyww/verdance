@@ -170,7 +170,8 @@ function makeTerrainMaterial(uniforms, q) {
         float farMix = smoothstep(uGrassRadius * 0.55, uGrassRadius * 1.05, dist);
         vec3 meadow = mix(grassNear, grassFar, farMix);
         vec4 lit = layer2(0.0, p.xz, 0.31);
-        vec3 forest = lit.rgb * vec3(0.85, 0.8, 0.75);
+        // leaf litter: dry leaves are fairly bright (albedo ~0.1-0.2), the texture alone is too dark
+        vec3 forest = lit.rgb * vec3(1.45, 1.32, 1.12);
         forest = mix(forest, forest * vec3(0.7, 0.9, 0.55), smoothstep(0.55, 0.8, nz2.g) * 0.6);
         vec4 dirt = layer2(3.0, p.xz, 0.38);
         vec4 peb = layer2(2.0, p.xz, 0.55);
@@ -203,7 +204,7 @@ function makeTerrainMaterial(uniforms, q) {
         col *= 0.88 + 0.12 * nz.a + 0.12 * nz.r;
         gWet = uWetness * (0.55 + 0.45 * (1.0 - grass)) + bank * 0.6;
         col *= 1.0 - gWet * 0.38;
-        gTerrainAO = (1.0 - canopy * 0.5) * mix(1.0, 0.8, grass * (1.0 - farMix));
+        gTerrainAO = (1.0 - canopy * 0.3) * mix(1.0, 0.8, grass * (1.0 - farMix));
         gSpec = 1.0 - grass * 0.8;
         diffuseColor.rgb = col;
         gN = n;
