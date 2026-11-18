@@ -12,7 +12,8 @@ export const PRESETS = {
     treeLod0: 26, treeLod1: 165, lodBand: 4, treeCap0: 260, treeCap1: 1400, leafScale: 0.7, impostorRes: 128, impostorFraction: 0.45,
     shrubDist: 28, shrubCap: 1500, shrubShadows: false, fernDist: 20, fernCap: 1500,
     rockLod0: 28, rockDetail: 2, rockCap0: 700, rockCap1: 5000, logDist: 70,
-    cloudPano: [768, 256], cloudPhases: 16, cloudSteps: 20, cloudLightSteps: 3, cloudNoiseRes: 64, rainCount: 3000,
+    cloudPano: [768, 256], cloudPhases: 16, cloudSteps: 22, cloudLightSteps: 3, cloudNoiseRes: 64, rainCount: 3000,
+    shafts: null,
   },
   medium: {
     label: 'Medium', renderScale: 0.85, maxPixelRatio: 1, msaa: 0, fxaa: true, bloom: true,
@@ -22,7 +23,8 @@ export const PRESETS = {
     treeLod0: 40, treeLod1: 300, treeCap0: 450, treeCap1: 2800, leafScale: 0.85, impostorRes: 256, impostorFraction: 0.7,
     shrubDist: 45, shrubCap: 3000, shrubShadows: false, fernDist: 32, fernCap: 3000,
     rockLod0: 45, rockDetail: 3, rockCap0: 1400, rockCap1: 7000, logDist: 110,
-    cloudPano: [1280, 400], cloudPhases: 16, cloudSteps: 32, cloudLightSteps: 4, cloudNoiseRes: 96, rainCount: 6000,
+    cloudPano: [1280, 400], cloudPhases: 16, cloudSteps: 30, cloudLightSteps: 4, cloudNoiseRes: 96, rainCount: 6000,
+    shafts: { scale: 0.25, steps: 12, dist: 90 },
   },
   high: {
     label: 'High', renderScale: 1, maxPixelRatio: 1.25, msaa: 4, fxaa: false, bloom: true,
@@ -32,7 +34,8 @@ export const PRESETS = {
     treeLod0: 55, treeLod1: 480, treeCap0: 800, treeCap1: 5000, leafScale: 1, impostorRes: 512, impostorFraction: 1,
     shrubDist: 70, shrubCap: 6000, shrubShadows: true, fernDist: 50, fernCap: 6000,
     rockLod0: 70, rockDetail: 3, rockCap0: 2600, rockCap1: 9000, logDist: 160,
-    cloudPano: [2048, 640], cloudPhases: 16, cloudSteps: 44, cloudLightSteps: 4, cloudNoiseRes: 128, rainCount: 12000,
+    cloudPano: [2048, 640], cloudPhases: 16, cloudSteps: 40, cloudLightSteps: 5, cloudNoiseRes: 128, rainCount: 12000,
+    shafts: { scale: 0.5, steps: 22, dist: 150 },
   },
   ultra: {
     label: 'Ultra', renderScale: 1, maxPixelRatio: 2, msaa: 4, fxaa: false, bloom: true,
@@ -42,7 +45,8 @@ export const PRESETS = {
     treeLod0: 80, treeLod1: 650, treeCap0: 1200, treeCap1: 7000, leafScale: 1.1, impostorRes: 512, impostorFraction: 1,
     shrubDist: 95, shrubCap: 9000, shrubShadows: true, fernDist: 70, fernCap: 9000,
     rockLod0: 100, rockDetail: 4, rockCap0: 3500, rockCap1: 9000, logDist: 220,
-    cloudPano: [2560, 800], cloudPhases: 12, cloudSteps: 60, cloudLightSteps: 5, cloudNoiseRes: 128, rainCount: 16000,
+    cloudPano: [2560, 800], cloudPhases: 12, cloudSteps: 52, cloudLightSteps: 6, cloudNoiseRes: 128, rainCount: 16000,
+    shafts: { scale: 0.5, steps: 32, dist: 190 },
   },
 };
 

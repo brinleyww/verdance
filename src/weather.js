@@ -4,19 +4,29 @@ import { G, COMMON_GLSL } from './shaderlib.js';
 import { skyRadianceJS } from './sky.js';
 
 export const WEATHERS = {
-  clear: { label: 'Clear', cover: 0.34, overcast: 0.0, fog: 0.00016, mist: 0.022, wind: 0.32, rain: 0, cd: 1.0, dark: 0.0, sun: 1.0, storm: 0 },
-  fair: { label: 'Fair', cover: 0.5, overcast: 0.04, fog: 0.0002, mist: 0.026, wind: 0.42, rain: 0, cd: 1.0, dark: 0.04, sun: 1.0, storm: 0 },
-  cloudy: { label: 'Cloudy', cover: 0.68, overcast: 0.32, fog: 0.00032, mist: 0.032, wind: 0.55, rain: 0, cd: 1.15, dark: 0.22, sun: 0.85, storm: 0 },
-  overcast: { label: 'Overcast', cover: 0.92, overcast: 0.86, fog: 0.0007, mist: 0.045, wind: 0.5, rain: 0, cd: 1.35, dark: 0.55, sun: 0.32, storm: 0 },
-  fog: { label: 'Fog', cover: 0.86, overcast: 0.9, fog: 0.0062, mist: 0.09, wind: 0.1, rain: 0, cd: 1.2, dark: 0.5, sun: 0.3, storm: 0 },
-  rain: { label: 'Rain', cover: 0.97, overcast: 0.95, fog: 0.0017, mist: 0.06, wind: 0.75, rain: 0.75, cd: 1.5, dark: 0.75, sun: 0.16, storm: 0 },
-  storm: { label: 'Storm', cover: 1.0, overcast: 1.0, fog: 0.0023, mist: 0.07, wind: 1.0, rain: 1.0, cd: 1.7, dark: 0.9, sun: 0.08, storm: 1 },
+  clear: { label: 'Clear', cover: 0.36, overcast: 0.0, stratus: 0, fog: 0.00016, mist: 0.022, wind: 0.3, rain: 0, cd: 1.0, dark: 0.0, sun: 1.0, storm: 0, haze: 1.0 },
+  fair: { label: 'Fair', cover: 0.52, overcast: 0.03, stratus: 0, fog: 0.0002, mist: 0.026, wind: 0.42, rain: 0, cd: 1.0, dark: 0.03, sun: 1.0, storm: 0, haze: 0.95 },
+  cloudy: { label: 'Cloudy', cover: 0.7, overcast: 0.28, stratus: 0.12, fog: 0.0003, mist: 0.032, wind: 0.58, rain: 0, cd: 1.15, dark: 0.2, sun: 0.88, storm: 0, haze: 0.75 },
+  overcast: { label: 'Overcast', cover: 0.9, overcast: 0.84, stratus: 0.85, fog: 0.0007, mist: 0.045, wind: 0.5, rain: 0, cd: 1.3, dark: 0.5, sun: 0.3, storm: 0, haze: 0.45 },
+  fog: { label: 'Fog', cover: 0.85, overcast: 0.88, stratus: 0.6, fog: 0.0062, mist: 0.09, wind: 0.1, rain: 0, cd: 1.2, dark: 0.45, sun: 0.32, storm: 0, haze: 2.2 },
+  rain: { label: 'Rain', cover: 0.96, overcast: 0.95, stratus: 1.0, fog: 0.0017, mist: 0.06, wind: 0.75, rain: 0.8, cd: 1.45, dark: 0.72, sun: 0.15, storm: 0, haze: 0.6 },
+  storm: { label: 'Storm', cover: 1.0, overcast: 1.0, stratus: 1.0, fog: 0.0023, mist: 0.07, wind: 1.0, rain: 1.0, cd: 1.65, dark: 0.9, sun: 0.07, storm: 1, haze: 0.5 },
 };
+// Markov chain: every state can reach rain within two steps
 const NEXT = {
-  clear: ['fair', 'fair', 'cloudy'], fair: ['clear', 'cloudy', 'cloudy', 'fair'], cloudy: ['fair', 'overcast', 'rain', 'fair'],
-  overcast: ['cloudy', 'rain', 'fog'], fog: ['cloudy', 'overcast', 'fair'], rain: ['overcast', 'storm', 'cloudy'], storm: ['rain'],
+  clear: ['fair', 'fair', 'cloudy'], fair: ['clear', 'cloudy', 'cloudy', 'overcast'], cloudy: ['fair', 'overcast', 'rain', 'rain'],
+  overcast: ['rain', 'rain', 'cloudy', 'fog', 'storm'], fog: ['cloudy', 'overcast', 'fair'], rain: ['overcast', 'storm', 'cloudy', 'fair'], storm: ['rain', 'rain', 'overcast'],
 };
-const KEYS = ['cover', 'overcast', 'fog', 'mist', 'wind', 'rain', 'cd', 'dark', 'sun', 'storm'];
+const KEYS = ['cover', 'overcast', 'stratus', 'fog', 'mist', 'wind', 'rain', 'cd', 'dark', 'sun', 'storm', 'haze'];
+// clouds build before the rain starts and the rain stops before they break up
+const LEAD = new Set(['cover', 'overcast', 'stratus', 'cd', 'dark', 'sun', 'wind']);
+const LAG = new Set(['rain', 'storm']);
+export const WEATHER_NEWS = {
+  clear: 'The sky is clearing', fair: 'Clouds drift in', cloudy: 'Clouds are gathering', overcast: 'The sky turns grey',
+  fog: 'Fog is rolling in', rain: 'Rain is coming', storm: 'A storm is building',
+};
+const ss = THREE.MathUtils.smoothstep;
+const K_EXT = [0.06, 0.12, 0.26]; // zenith optical depth per channel (Rayleigh + aerosol), drives sun colour
 
 export class Environment {
   constructor(sky, sunLight, hemi, audio) {
@@ -29,7 +39,9 @@ export class Environment {
     this.s = Object.assign({}, WEATHERS.fair);
     this.from = Object.assign({}, WEATHERS.fair);
     this.blend = 1;
-    this.timer = 200 + Math.random() * 100;
+    this.timer = 45 + Math.random() * 45;
+    this.onChange = null;
+    this.shaft = { scatter: 0, amount: 0 };
     this.wetness = 0;
     this.flash = 0;
     this.nextFlash = 8;
@@ -41,12 +53,15 @@ export class Environment {
   }
 
   setWeather(name, instant = false) {
+    const changed = name !== this.target;
     this.from = Object.assign({}, this.s);
     this.target = name;
     this.blend = instant ? 1 : 0;
-    if (instant) Object.assign(this.s, WEATHERS[name]);
-    this.timer = 160 + Math.random() * 160;
+    if (instant) { Object.assign(this.s, WEATHERS[name]); this.current = name; }
+    // states last 1.5-4 minutes; storms are short
+    this.timer = (name === 'storm' ? 60 : 85) + Math.random() * 140;
     this.envDirty = true;
+    if (changed && !instant && this.onChange) this.onChange(name);
   }
 
   update(dt) {
@@ -59,10 +74,14 @@ export class Environment {
       }
     } else if (this.target !== this.locked) this.setWeather(this.locked);
     if (this.blend < 1) {
-      this.blend = Math.min(1, this.blend + dt / 50);
-      const t = this.blend * this.blend * (3 - 2 * this.blend);
+      this.blend = Math.min(1, this.blend + dt / 32);
+      const t = this.blend;
       const to = WEATHERS[this.target];
-      for (const k of KEYS) this.s[k] = this.from[k] + (to[k] - this.from[k]) * t;
+      for (const k of KEYS) {
+        const up = to[k] > this.from[k];
+        const tk = LAG.has(k) ? (up ? ss(t, 0.55, 1) : ss(t, 0, 0.45)) : LEAD.has(k) ? (up ? ss(t, 0, 0.7) : ss(t, 0.3, 1)) : ss(t, 0, 1);
+        this.s[k] = this.from[k] + (to[k] - this.from[k]) * tk;
+      }
       if (this.blend >= 1) this.current = this.target;
     }
     const s = this.s;
@@ -77,13 +96,34 @@ export class Environment {
     this.sunDir.set(Math.cos(e) * Math.cos(az), Math.sin(e), -Math.cos(e) * Math.sin(az) * 0.85 + 0.35).normalize();
     G.uSunDir.value.copy(this.sunDir);
     const up = Math.max(0, this.sunDir.y);
-    this.daylight = THREE.MathUtils.smoothstep(this.sunDir.y, -0.08, 0.2);
-    const warm = 1 - THREE.MathUtils.smoothstep(up, 0.05, 0.45);
-    G.uSunColor.value.setRGB(1.0, 0.95 - warm * 0.28, 0.88 - warm * 0.5);
-    const sunI = 3.3 * s.sun * this.daylight;
-    this.sky.uniforms.uSunIntensity.value = 3.3 * this.daylight;
+    const se = this.sunDir.y;
+    // daylight fades through civil twilight instead of switching off at the horizon
+    this.daylight = ss(se, -0.035, 0.16);
+    // sun colour from air mass (Kasten-Young): white at noon, gold, then red at the horizon
+    const ed = Math.max(-1.5, THREE.MathUtils.radToDeg(Math.asin(Math.max(-1, Math.min(1, se)))));
+    const airmass = 1 / (Math.max(0, Math.sin(THREE.MathUtils.degToRad(ed))) + 0.50572 * Math.pow(ed + 6.07995, -1.6364));
+    const tr = K_EXT.map((k) => Math.exp(-k * airmass) / Math.exp(-k * 1.08));
+    const mx = Math.max(tr[0], tr[1], tr[2]);
+    G.uSunColor.value.setRGB(tr[0] / mx, 0.97 * tr[1] / mx, 0.92 * tr[2] / mx);
+    const sunLum = Math.min(1, 0.2126 * tr[0] + 0.7152 * tr[1] + 0.0722 * tr[2]);
+    const sunFade = this.daylight * Math.pow(sunLum, 0.55);
+    const sunI = 3.3 * s.sun * sunFade;
+    this.sky.uniforms.uSunIntensity.value = 3.3 * sunFade;
     this.sky.uniforms.uOvercast.value = s.overcast;
-    this.sky.uniforms.uSkyBright.value = (1.0 - s.overcast * 0.22 - s.storm * 0.25) * (0.06 + 0.94 * this.daylight);
+    this.sky.uniforms.uSkyBright.value = (1.0 - s.overcast * 0.22 - s.storm * 0.25) * (0.03 + 0.97 * ss(se, -0.2, 0.16));
+    this.sky.uniforms.uStratus.value = s.stratus;
+    // clouds sit 1.5-3 km up: they still catch the (redder) sun a while after it leaves the ground
+    {
+      const ec = ed + 1.6;
+      const amc = 1 / (Math.max(0, Math.sin(THREE.MathUtils.degToRad(ec))) + 0.50572 * Math.pow(Math.max(ec, -1.5) + 6.07995, -1.6364));
+      const tc = K_EXT.map((k) => Math.exp(-k * amc) / Math.exp(-k * 1.08));
+      const up2 = ss(se, -0.07, 0.05);
+      this.sky.uniforms.uCloudSun.value.setRGB(tc[0], 0.97 * tc[1], 0.92 * tc[2]).multiplyScalar(3.3 * up2);
+    }
+    // sun shafts: hazier air in the morning, evening and after rain
+    const lowSun = 1 - ss(se, 0.12, 0.5);
+    this.shaft.scatter = 0.0028 * s.haze * (1 + 0.9 * lowSun) * (1 + this.wetness * 0.9);
+    this.shaft.amount = sunI;
     this.sky.uniforms.uCloudDensity.value = s.cd;
     this.sky.uniforms.uCloudDark.value = s.dark;
     G.uCloudCover.value = s.cover;
@@ -135,10 +175,13 @@ export class Environment {
     // fog colours
     skyRadianceJS(d.set(-sd.x, 0.03, -sd.z).normalize(), sd, s.overcast, skyB, G.uFogColor.value);
     skyRadianceJS(d.set(sd.x, 0.03, sd.z).normalize(), sd, s.overcast, skyB, G.uFogSunColor.value);
-    G.uFogColor.value.lerp(new THREE.Color(0.62, 0.65, 0.68).multiplyScalar(skyB), Math.min(1, s.fog * 160));
+    // thick fog takes the colour of the overcast horizon, so far hills fade into the sky instead of glowing
+    G.uFogColor.value.lerp(new THREE.Color(0.41, 0.43, 0.46).multiplyScalar(skyB), Math.min(1, s.fog * 160 + s.overcast * 0.5));
     G.uFogSunColor.value.lerp(G.uFogColor.value, s.overcast * 0.7);
     this.sky.uniforms.uAmbTop.value.copy(zen).multiplyScalar(1.15).lerp(cloudAmb, s.overcast * 0.6);
     this.sky.uniforms.uAmbBottom.value.copy(bounce).multiplyScalar(0.8).add(new THREE.Color(0.05, 0.055, 0.06).multiplyScalar(skyB));
+    // a thick deck is lit from inside by multiple scattering: its underside is only a little darker than its top
+    this.sky.uniforms.uAmbBottom.value.lerp(this.sky.uniforms.uAmbTop.value.clone().multiplyScalar(0.72), s.overcast * 0.85);
   }
 
   get state() {
@@ -163,8 +206,8 @@ void main() {
   vec3 toCam = normalize(cameraPosition - p);
   vec3 side = normalize(cross(dir, toCam));
   float len = 0.55 + aSeed.w * 0.35;
-  vec3 wp = p + dir * position.y * len + side * position.x * 0.008;
-  vA = on * (0.12 + 0.12 * aSeed.w) * smoothstep(1.0, 4.0, length(p - cameraPosition));
+  vec3 wp = p + dir * position.y * len + side * position.x * 0.009;
+  vA = on * (0.12 + 0.14 * aSeed.w) * smoothstep(1.0, 4.0, length(p - cameraPosition));
   gl_Position = projectionMatrix * viewMatrix * vec4(wp, 1.0);
 }
 `;

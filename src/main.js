@@ -11,7 +11,7 @@ import { Trees } from './trees.js';
 import { Props } from './props.js';
 import { Structures } from './structures.js';
 import { Water } from './water.js';
-import { Environment, Rain, WEATHERS } from './weather.js';
+import { Environment, Rain, WEATHERS, WEATHER_NEWS } from './weather.js';
 import { SunShadows } from './shadows.js';
 import { Player, setupTouch } from './player.js';
 import { Game } from './game.js';
@@ -123,7 +123,8 @@ async function boot() {
 
   const game = new Game({ world, structures, player, audio, env, camera });
   Object.assign(window.__verdance, { player, env, game, camera, renderer, world, trees, grass, sky, structures, terrain, props, scene, settings, audio });
-  const post = new Post(renderer, scene, camera, q);
+  const post = new Post(renderer, scene, camera, q, shadows, G);
+  window.__verdance.post = post;
 
   // ---------- sizing + adaptive resolution ----------
   let scale = q.renderScale;
@@ -178,13 +179,19 @@ async function boot() {
     if (m) { const parts = m[1].split(', '); g = parts[1] || parts[0]; }
     $('gpu-note').textContent = g.replace(/\(0x[0-9a-f]+\)/i, '').replace(/Direct3D.*$|OpenGL.*$|Metal.*$/i, '').trim().slice(0, 48);
   }
-  const wsel = $('set-weather');
-  wsel.innerHTML = '<option value="auto">Changing</option>' + Object.entries(WEATHERS).map(([k, v]) => `<option value="${k}">${v.label}</option>`).join('');
-  wsel.value = settings.weather;
-  wsel.addEventListener('change', () => {
-    settings.weather = wsel.value; saveSettings(settings);
-    if (wsel.value === 'auto') env.locked = null; else env.locked = wsel.value;
-  });
+  // weather pickers (title screen + menu) stay in sync; Auto lets the weather wander on its own
+  const wsels = [$('set-weather'), $('title-weather')].filter(Boolean);
+  const wopts = '<option value="auto">Auto (changes)</option>' + Object.entries(WEATHERS).map(([k, v]) => `<option value="${k}">${v.label}</option>`).join('');
+  for (const wsel of wsels) {
+    wsel.innerHTML = wopts;
+    wsel.value = settings.weather;
+    wsel.addEventListener('change', () => {
+      settings.weather = wsel.value; saveSettings(settings);
+      for (const o of wsels) o.value = wsel.value;
+      if (wsel.value === 'auto') env.locked = null;
+      else { env.locked = wsel.value; env.setWeather(wsel.value); }
+    });
+  }
   const bindRange = (id, key, apply) => {
     const el = $(id);
     if (el.type === 'checkbox') el.checked = !!settings[key]; else el.value = settings[key];
@@ -200,6 +207,8 @@ async function boot() {
   bindRange('set-dynres', 'dynRes', (v) => { if (!v && scale !== q.renderScale) { scale = q.renderScale; resize(); } });
 
   let playing = false, paused = false, hudOff = false;
+  // a quiet line when the weather turns on its own
+  env.onChange = (name) => { if (playing && !env.locked && WEATHER_NEWS[name]) game.toast(WEATHER_NEWS[name], 5); };
   $('loading').classList.add('hidden');
   $('title').classList.remove('hidden');
   if (isTouch) $('title').querySelector('.keys').style.display = 'none';
@@ -275,7 +284,7 @@ async function boot() {
 
   // ---------- main loop ----------
   const clock = new THREE.Clock();
-  let exposure = 1, time = 0, frame = 0, fpsAcc = 0, fpsN = 0, fpsShown = 0, frameEma = 16.7, envTimer = 0;
+  let exposure = 1, time = 0, frame = 0, fpsAcc = 0, fpsN = 0, fpsShown = 0, frameEma = 16.7, envTimer = 0, canopySm = 0;
   const aState = {
     camPos: camera.position, camRight: new THREE.Vector3(), camForward: new THREE.Vector3(), speed: 0, forest: 0, wind: 0, rain: 0, fog: 0, storm: 0,
     daylight: 1, creekDist: Infinity, creekDir: { x: 0, z: 1 }, waterfallDist: Infinity, waterfallDir: { x: 0, z: 1 }, chasmDist: 1e9,
@@ -350,9 +359,11 @@ async function boot() {
     {
       const p = camera.position;
       const canopy = world.forestAt(p.x, p.z);
-      const target = (1 + canopy * 1.25) * (1 + env.s.overcast * 0.25) * (1 + (1 - env.daylight) * 0.6);
+      const target = (1 + canopy * 1.25) * (1 + env.s.overcast * 0.25) * (1 + (1 - env.daylight) * 1.4);
       exposure += (target - exposure) * Math.min(1, dt * 0.8);
       post.grade.uniforms.uExposure.value = exposure;
+      canopySm += (Math.min(1, canopy * 1.4) - canopySm) * Math.min(1, dt * 0.6);
+      post.setShafts(env.shaft.amount, env.shaft.scatter, canopySm);
     }
     const qy = beginGpu(frame);
     sky.updateClouds(camera.position);
